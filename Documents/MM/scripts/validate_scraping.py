@@ -71,17 +71,18 @@ def check_source(name: str, url: str, validate_fn) -> bool:
 # Per-source validation helpers
 # ---------------------------------------------------------------------------
 
-def _validate_barttorvik_team(text: str) -> bool:
-    return "AdjOE" in text or "T-Rank" in text
-
-
 def _validate_barttorvik_player(text: str) -> bool:
-    # Any parsable HTML response from a 200 OK is sufficient.
-    return len(text) > 0
+    # trankf.php player endpoints return data without JS challenge.
+    return len(text) > 100
 
 
-def _validate_hoopmath(text: str) -> bool:
-    return "rim" in text.lower()
+def _validate_barttorvik_continuity(text: str) -> bool:
+    return len(text) > 100
+
+
+def _validate_sports_reference(text: str) -> bool:
+    # Sports-Reference CBB returns full HTML (shot-type proxy source replacing Hoop-Math).
+    return "basketball" in text.lower() or len(text) > 500
 
 
 def _validate_rotowire(text: str) -> bool:
@@ -96,22 +97,26 @@ def _validate_sbr(text: str) -> bool:
 # ---------------------------------------------------------------------------
 # Source definitions
 # ---------------------------------------------------------------------------
+# NOTE: barttorvik.com/trank.php (the team T-Rank table) is behind a Cloudflare
+# JS challenge and cannot be validated with a plain GET.  The scraper in
+# src/data/barttorvik.py handles this via Playwright when required.
+# We validate the endpoints that work without JS (player/continuity tables).
 
 SOURCES = [
-    (
-        "Barttorvik T-Rank",
-        "https://barttorvik.com/trank.php?year=2024",
-        _validate_barttorvik_team,
-    ),
     (
         "Barttorvik Player (PORPAGATU)",
         "https://barttorvik.com/trankf.php?tvalue=Duke&year=2024&type=porpagatu",
         _validate_barttorvik_player,
     ),
     (
-        "Hoop-Math",
-        "https://hoop-math.com/home.php",
-        _validate_hoopmath,
+        "Barttorvik Continuity",
+        "https://barttorvik.com/continuity.php?year=2024",
+        _validate_barttorvik_continuity,
+    ),
+    (
+        "Sports Reference CBB (shot-type proxy — replaces defunct Hoop-Math)",
+        "https://www.sports-reference.com/cbb/seasons/men/2024-school-stats.html",
+        _validate_sports_reference,
     ),
     (
         "Rotowire Injuries",
