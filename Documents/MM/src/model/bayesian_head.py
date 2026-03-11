@@ -4,12 +4,22 @@ src/model/bayesian_head.py
 Bayesian head for the NCAA March Madness ST-GNN.
 
 Wraps ST-GNN team embeddings (produced by TemporalEncoder) in a PyMC
-hierarchical model that yields full posterior distributions over three
+hierarchical model that yields full posterior distributions over two
 simultaneous game outcomes:
 
   1. Win probability  (Bernoulli likelihood)
   2. Point spread     (Normal likelihood)
-  3. Game total       (Normal likelihood)
+
+NOTE: Game totals (obs_total) are permanently excluded from this model.
+Two-target architecture only: win probability + spread.
+
+Clutch/Luck Regression Prior
+-----------------------------
+Per the Law of Large Numbers, close-game win % regresses strongly toward 0.5
+over a ~35-game D-I season (Gilovich, Vallone & Tversky, 1985; see also
+Berri & Schmidt "Stumbling on Wins").  A HalfNormal(sigma=0.15) prior on the
+luck scale enforces this regression:  any luck effect >2σ (>0.30) is
+strongly penalised, keeping luck adjustments bounded near zero.
 
 Hierarchical structure
 ----------------------
@@ -117,9 +127,13 @@ class BayesianHead:
         away_seed: np.ndarray,
         y_win: np.ndarray,
         y_spread: np.ndarray,
-        y_total: np.ndarray,
+        home_luck: np.ndarray | None = None,
+        away_luck: np.ndarray | None = None,
     ) -> "pm.Model":
         """Construct and return the PyMC hierarchical model.
+
+        Two-target model: win probability (Bernoulli) + spread (Normal).
+        Game totals are permanently excluded per architecture mandate.
 
         Parameters
         ----------
@@ -139,8 +153,11 @@ class BayesianHead:
             Observed outcome: 1 if home team won.
         y_spread : (G,) float
             Observed point spread (home score − away score).
-        y_total : (G,) float
-            Observed game total (home score + away score).
+        home_luck : (G,) float | None
+            Barttorvik close-game win fraction for the home team.  When
+            provided, a regression-to-mean prior (LLN) is applied.
+        away_luck : (G,) float | None
+            Barttorvik close-game win fraction for the away team.
 
         Returns
         -------
@@ -148,8 +165,6 @@ class BayesianHead:
             The constructed PyMC model (not yet sampled).
         """
         import pymc as pm
-
-        G = len(y_win)
 
         with pm.Model() as model:
             # ---- 1. Conference random effects (hierarchical) ---------------
@@ -168,7 +183,19 @@ class BayesianHead:
             W_home = pm.Normal("W_home", mu=0.0, sigma=1.0, shape=self.embedding_dim)
             W_away = pm.Normal("W_away", mu=0.0, sigma=1.0, shape=self.embedding_dim)
 
-            # ---- 4. Linear predictors (deterministic) ----------------------
+            # ---- 4. Clutch/Luck regression-to-mean prior (LLN) ------------
+            # Per LLN, close-game win % regresses toward 0.5 over a ~35-game
+            # season.  sigma <= 0.15 bounds luck effects near zero.
+            # (Gilovich et al. 1985; Berri & Schmidt "Stumbling on Wins")
+            luck_scale = pm.HalfNormal("luck_scale", sigma=0.15)
+            if home_luck is not None and away_luck is not None:
+                # Soft prior: observed luck is pulled toward 0.5.
+                pm.Normal("obs_home_luck", mu=0.5, sigma=luck_scale,
+                          observed=home_luck)
+                pm.Normal("obs_away_luck", mu=0.5, sigma=luck_scale,
+                          observed=away_luck)
+
+            # ---- 5. Linear predictors (deterministic) ----------------------
             # Use pm.math.dot so this stays in the PyTensor computation graph
             # and remains mockable in tests (avoids raw numpy @ on RV objects).
             home_strength = (
@@ -183,22 +210,14 @@ class BayesianHead:
             )
             delta = home_strength - away_strength
 
-            # ---- 5. Win probability — Bernoulli likelihood -----------------
+            # ---- 6. Win probability — Bernoulli likelihood -----------------
             p_win = pm.math.sigmoid(delta)
             obs_win = pm.Bernoulli("obs_win", p=p_win, observed=y_win)
 
-            # ---- 6. Spread — Normal likelihood -----------------------------
+            # ---- 7. Spread — Normal likelihood -----------------------------
             sigma_spread = pm.HalfNormal("sigma_spread", sigma=10.0)
             obs_spread = pm.Normal(
                 "obs_spread", mu=delta, sigma=sigma_spread, observed=y_spread
-            )
-
-            # ---- 7. Total — Normal likelihood ------------------------------
-            mu_total_base = pm.Data("mu_total_base", np.full(G, 140.0))
-            mu_total = home_strength + away_strength + mu_total_base
-            sigma_total = pm.HalfNormal("sigma_total", sigma=15.0)
-            obs_total = pm.Normal(
-                "obs_total", mu=mu_total, sigma=sigma_total, observed=y_total
             )
 
         return model

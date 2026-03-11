@@ -1,0 +1,92 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --hardwood-dark: #1a1208;
+  --hardwood-mid: #2a1f12;
+  --hardwood-light: #3d2e1a;
+  --basketball-orange: #ff6b35;
+  --basketball-orange-dim: rgba(255, 107, 53, 0.15);
+  --gold: #d4a843;
+  --gold-dim: rgba(212, 168, 67, 0.15);
+  --court-line: rgba(255, 107, 53, 0.12);
+  --win-green: #2ecc71;
+  --loss-red: #e74c3c;
+  --text-primary: #f5f0e8;
+  --text-secondary: rgba(245, 240, 232, 0.6);
+  --text-muted: rgba(245, 240, 232, 0.35);
+}
+
+body {
+  background-color: var(--hardwood-dark);
+  color: var(--text-primary);
+  font-family: var(--font-inter), system-ui, sans-serif;
+  min-height: 100vh;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,107,53,0.3); border-radius: 3px; }
+
+@layer components {
+  .glass-wood {
+    background: rgba(42, 31, 18, 0.75);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 107, 53, 0.12);
+    border-radius: 12px;
+  }
+
+  .glass-highlight {
+    background: rgba(42, 31, 18, 0.8);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 107, 53, 0.25);
+    border-radius: 12px;
+    box-shadow: 0 0 20px rgba(255, 107, 53, 0.08), inset 0 0 20px rgba(255, 107, 53, 0.03);
+  }
+
+  .glass-gold {
+    background: rgba(42, 31, 18, 0.8);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(212, 168, 67, 0.3);
+    border-radius: 12px;
+    box-shadow: 0 0 20px rgba(212, 168, 67, 0.08);
+  }
+
+  .stat-bar {
+    height: 8px;
+    border-radius: 4px;
+    background: rgba(255, 107, 53, 0.1);
+    overflow: hidden;
+  }
+
+  .stat-bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+}
+
+@layer utilities {
+  .glow-orange {
+    text-shadow:
+      0 0 8px rgba(255, 107, 53, 0.6),
+      0 0 20px rgba(255, 107, 53, 0.3);
+  }
+
+  .glow-gold {
+    text-shadow:
+      0 0 8px rgba(212, 168, 67, 0.6),
+      0 0 20px rgba(212, 168, 67, 0.3);
+  }
+
+  .glow-green {
+    text-shadow:
+      0 0 8px rgba(46, 204, 113, 0.6),
+      0 0 20px rgba(46, 204, 113, 0.3);
+  }
+}
