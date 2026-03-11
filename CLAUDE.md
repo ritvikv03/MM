@@ -35,13 +35,23 @@ Build a novel predictive model to find **Closing Line Value (CLV)** and maximize
     - **Conference Nodes** — one per conference (ACC, Big 12, SEC, MAC, etc.); features = conference-level adjusted efficiency aggregates
     - Every Team Node must be connected to its primary Conference Node via a directed `member_of` edge. This allows the GAT to explicitly model inter-conference strength disparities (e.g., an average Big 12 team vs. a dominant MAC team) rather than treating all teams in a contextual silo.
   - Each game edge = directed Team→Team, weighted by margin/efficiency delta
-  - **Edge Features:** Must explicitly encode Court Location (Home/Away/Neutral) and Rest Disparity (days since last game for both teams). Tournament games are played on neutral courts; the GAT must be able to isolate neutral-court baseline strength from home-court inflation.
+  - **Edge Features:** Must explicitly encode:
+    - **Court Location** (Home/Away/Neutral): Tournament games are played on neutral courts; the GAT must isolate neutral-court baseline strength from home-court inflation.
+    - **Rest Disparity**: days since last game for both teams.
+    - **Travel Fatigue / Altitude Delta (mandatory):** For each game edge, compute (a) **Distance Traveled** in miles (great-circle distance from home campus to tournament venue), (b) **Time Zones Crossed** (absolute difference in UTC offsets, discretized 0/1/2/3+), and (c) **Elevation Flag** (boolean; 1 if tournament venue elevation > 5,000 ft above sea level — e.g., Denver/Salt Lake City/Albuquerque). These three sub-features are concatenated into a `travel_fatigue` edge feature vector of shape (3,). Campus coordinates are pulled from a static lookup CSV; venue coordinates are scraped from NCAA bracket pairings. Teams crossing ≥3 time zones with ≤48 h rest receive the maximum fatigue penalty the GAT can learn to apply.
 
 ### Probabilistic Modeling
 - **PyMC** (preferred) or **Stan** for Bayesian multi-task outcome generation
   - Posterior distributions over **win probability** and **point spread (margin of victory) only**
   - **Game Totals are permanently excluded from the model objective.** End-of-game fouling protocols introduce noise that has no mathematical bearing on team quality, Brier Score accuracy, or CLV. Do not add an `obs_total` likelihood term to the PyMC model. Do not predict, log, or backtest total points.
-  - Hierarchical priors over conferences and seeds
+  - Hierarchical priors over conferences, seeds, and **coaches**
+  - **Coach-Level Hierarchical Prior ("Tom Izzo Effect" — mandatory):** Inject a `coach_id` integer index (one per head coach) into the Bayesian model head.  For each coach, infer a latent `coach_ats_effect` variable:
+    ```
+    mu_coach   ~ Normal(0, 0.5)          # league-wide mean ATS tendency
+    sigma_coach ~ HalfNormal(0.3)        # cross-coach variation
+    coach_ats_effect[c] ~ Normal(mu_coach, sigma_coach)   # per-coach partial pooling
+    ```
+    The `coach_ats_effect` is added to `delta` (home_strength − away_strength) before the Bernoulli and Normal likelihoods.  This encodes the empirical observation that coaches like Tom Izzo (Michigan State), Bill Self (Kansas), and John Calipari (Kentucky) systematically over- or under-perform regular-season efficiency metrics in sudden-death tournament formats.  Historical coaching ATS data must be scraped from Sports Reference CBB coaching records.  Implemented in `bayesian_head.py::build_model(home_coach, away_coach, ...)` with shapes `(G,)` int arrays indexed into `coach_ats_effect`.
   - MCMC / NUTS sampler for credible intervals
   - **Clutch/Luck Regression Prior (mandatory):** The Bayesian head must encode an explicit shrinkage prior on "clutch" performance metrics sourced from Barttorvik's Luck metric and close-game win percentage (games decided by ≤3 points). Mathematically, over a 35-game NCAA regular season sample, close-game outcomes revert strongly to mean. Implement this as a `pm.Beta` or `pm.Normal` prior centered at 0.5 with a tight sigma (≤0.15) on the luck/clutch parameter, so that a team going 10-0 in close games has its posterior win-probability distribution penalized downward toward average volatility rather than being treated as a genuine skill signal. This prior must be documented in the model's docstring with the cite: "Law of Large Numbers regression over 35-game samples."
   - **Compute Optimization:** For local TDD and prototyping, default PyMC to Variational Inference (ADVI) or limit MCMC chains/draws to prevent hanging. Full NUTS sampling and PyG training sweeps should be configurable via CLI flags to run on cloud/GPU infrastructure when ready.
@@ -96,6 +106,7 @@ Build a novel predictive model to find **Closing Line Value (CLV)** and maximize
 - **Barttorvik Player Data** — replaces EvanMiya entirely (see §3.2 above)
   - PORPAGATU! and BPM tables scraped directly from `barttorvik.com`
   - **EvanMiya is permanently removed.** Do not create or maintain `src/data/evanmiya.py`.
+  - **Player BPM must be computed as a Rolling EWMA, not a season-long average.**  The pipeline uses `pandas.DataFrame.ewm(halflife=15, times=game_dates)` (or equivalent) to weight each player's per-game BPM contribution so that games in the final 15 days of the regular season carry the dominant weight.  This captures "Freshman Pop" and late-season rotation cohesion — a team that discovered its lineup in late February should be rated on its current performance gradient, not dragged down by early-season turnover.  Implemented in `barttorvik.py::compute_ewma_bpm(player_games_df, halflife_days=15)` returning a per-player weighted BPM Series, then aggregated by minutes-weighted mean to a team-level scalar.
 - **Sports Reference CBB** (free, public — replaces defunct Hoop-Math)
   - `hoop-math.com` domain is dead (DNS does not resolve as of 2026-03-10). **Do not attempt to scrape it.**
   - Use `sports-reference.com/cbb/seasons/men/{year}-school-stats.html` for shot-type proxies
@@ -224,11 +235,27 @@ Tag each run with `season=YYYY` and `model_version=vX.Y`.
 | 3 | ST-GNN model — GAT encoder + LSTM/Transformer temporal | `/using-git-worktrees` |
 | 4 | Bayesian head — PyMC posterior distributions | `/using-git-worktrees` |
 | **CHECKPOINT** | Code review of `src/model/` | `/requesting-code-review` |
-| 5 | Monte Carlo bracket simulation engine | `/using-git-worktrees` |
+| 5 | Monte Carlo bracket simulation engine + Chaos Engine | `/using-git-worktrees` |
 | 6 | Kelly Criterion sizing + CLV computation | `/using-git-worktrees` |
 | **CHECKPOINT** | Code review of `src/betting/` | `/requesting-code-review` |
 | 7 | W&B experiment tracking integration | — |
 | 8 | Backtesting + calibration evaluation | `/subagent-driven-development` |
+
+### Monte Carlo Simulation — "Chaos Engine" (Topology Disruption Rule)
+
+The bracket simulator in `src/simulation/monte_carlo.py` must implement a **Topology Disruption Rule** that activates when a major-seed upset occurs:
+
+**Trigger condition:** A 1-seed or 2-seed team is eliminated in Rounds 1 or 2 within a given bracket region.
+
+**Disruption logic (applied per simulation trial):**
+1. **Identify affected nodes:** All surviving teams in the same bracket region as the eliminated titan.
+2. **Recompute path difficulty:** Without the titan, the expected difficulty of the remaining path drops. Reweight each surviving team's advancement probability using its posterior spread distribution against the revised field (remove the titan's influence from the denominator of path-probability products).
+3. **Apply fatigue/momentum adjustment:** Model the psychological + physical wear-and-tear. For each game a team played to eliminate the titan, add a `chaos_fatigue_penalty` (default: `−0.02` to win probability per game played at max exertion, configurable). Surviving teams that played an overtime game inherit an additional `−0.015` penalty for the next round.
+4. **Re-draw remaining bracket sub-tree:** For the affected region, resample all pairwise matchup probabilities using updated team-strength posteriors (with the titan's bracket path collapsed), then continue the simulation forward.
+
+This ensures that when Kansas exits in Round 1, the simulator correctly re-evaluates the Midwest region's path as "open" rather than applying pre-computed single-elimination probabilities that assumed Kansas would reach the Elite Eight.
+
+Implement as `_apply_chaos_engine(bracket_state, eliminated_team, region, posteriors, rng)` returning an updated `bracket_state` dict. Must be called inside the main simulation loop immediately after each round resolution.
 
 ---
 
@@ -244,4 +271,153 @@ Tag each run with `season=YYYY` and `model_version=vX.Y`.
 
 ---
 
-*Last updated: 2026-03-10 — Architecture locked. Three refinements applied: (1) Heterogeneous Graph with Conference Nodes + member_of edges; (2) Clutch/Luck regression-to-mean prior in PyMC head; (3) Game Totals permanently removed from model objective — win probability and spread only.*
+## 8. Executive-Level Production Layer
+
+To manage risk, optimize pool leverage, and provide a war-room dashboard for high-stakes betting syndicates, the architecture includes an Executive-Level Production Layer encompassing 5 distinct phases:
+
+### Phase 1: Game Theory & Pool Optimization (The "Leverage" Engine)
+- **Public Pick Scraper:** Ingests "Public Pick Percentages" from free sources (Yahoo/ESPN/NCAA).
+- **Leverage Calculator:** Computes `Leverage Score = True_Win_Probability / Public_Pick_Percentage`.
+- **Bracket Variants:** Automatically generates 3 distinct topologies:
+  - **Chalk Bracket:** Optimized for small pools (<20 people).
+  - **Leverage Bracket:** Optimized for medium pools (50-100 people) by fading over-owned favorites.
+  - **Chaos Bracket:** Optimized for massive contests (1,000+ people) by prioritizing low-ownership deep runs.
+
+### Phase 2: Live Dynamic Hedging (The "Risk Desk")
+- **Live Hedging Calculator:** Utilizes fractional Kelly-Criterion sizing based on live Moneyline odds.
+- **EV Lock:** Automatically calculates the exact dollar amount needed to bet on the opposing team to lock in a risk-free profit based on current pool standings and equity.
+
+### Phase 3: The "Board of Directors" Ensemble Weighting
+- Refactors the ST-GNN + Bayesian head as the primary engine but introduces three lightweight secondary voter models:
+  - **The Fundamentalist:** Weights only AdjO/AdjD/Rebounding efficiency.
+  - **The Market Reader:** Weights only historical spread movement and sharp money indicators.
+  - **The Chaos Agent:** Weights officiating tendencies, travel fatigue, altitude, and momentum/kill-shot vulnerability.
+- **Consensus Output:** Produces a final summary stating overall confidence and specific dissent reasons.
+
+### Phase 4: Continuous "Information Asymmetry" Scraper
+- Lightweight background task scraping subreddits (e.g., `r/CollegeBasketball`) and news feeds using free tools (`BeautifulSoup`, `Playwright`, `PRAW`).
+- **Keyword Monitoring:** Alerts on terms like "walking boot," "sprain," "suspension," or "not at practice."
+- Flags affected matchups for manual human review before committing the simulation path.
+
+### Phase 5: The "War Room" UI
+- Next.js dashboard integrating the backend metrics.
+- **Matrix View:** Heat-map of the entire bracket colored by `Leverage Score` (Green = High Value/Low Ownership; Red = Toxic Chalk).
+- **WPA (Win Probability Added) Slider:** Interactive slider in the Matchup Interrogator to manually adjust team efficiency (simulating injury/foul trouble) and instantly visualize the dynamic shift in bracket topology.
+
+---
+
+## 9. Boss-Level Mathematical Upgrades
+
+Advanced mathematical, economic, and ML theories integrated into the core engine.
+
+### Pillar 1: Advanced Statistical & Temporal Modeling
+
+#### 1.1 Zero-Truncated Skellam Distribution (`src/model/skellam.py`)
+- Replaces the Normal spread likelihood with a **Zero-Truncated Skellam** distribution.
+- Models margin-of-victory as the difference of two Poisson scoring processes.
+- **Guarantees P(tie) = 0**, matching NCAA overtime rules.
+- Uses Modified Bessel functions (I_v) for exact PMF computation.
+- References: Karlis & Ntzoufras (2003); Skellam (1946).
+
+#### 1.2 Shannon Entropy Scoring Variance (`src/data/shannon_entropy.py`)
+- Computes **minute-by-minute Shannon Entropy** (H = -Σ p log₂ p) to quantify offensive consistency.
+- High entropy = consistent scoring; Low entropy = bursty "Kill Shot" tendencies.
+- **Kill Shot Markov Matrix** (4-state): Dead Ball → Home Run → Away Run → Trading Baskets.
+- Injected as node features into the ST-GNN alongside efficiency metrics.
+
+#### 1.3 Gaussian Copula Cross-Game Correlation (`src/simulation/copula_engine.py`)
+- Replaces independent Monte Carlo draws with **conference-correlated Gaussian Copula** draws.
+- When a conference favorite is upset, all other teams from that conference receive a **contagion downgrade** (configurable, default −3%).
+- Ensures the Chaos Engine captures real-world market correction dynamics.
+- References: Nelsen (2006); McNeil, Frey, Embrechts (2005).
+
+### Pillar 2: Financial Engineering & Game Theory
+
+#### 2.1 Real Options Valuation / Black-Scholes (`src/betting/options_pricing.py`)
+- Treats tournament advancement as a **European option chain** with per-round expiry.
+- Computes **Vega** (∂C/∂σ = S√T φ(d1)) to quantify path volatility sensitivity.
+- Hedge recommendations: High Vega + High Equity → HEDGE_AGGRESSIVELY; High Vega + Low Equity → LET_IT_RIDE.
+
+#### 2.2 Prospect Theory CLV Identification (`src/betting/prospect_theory.py`)
+- Implements the **Prelec (1998) probability weighting function**: w(p) = exp(−(−ln p)^α).
+- Identifies the Favorite-Longshot Bias: public overweights small p by ~8%, underweights large p by ~10%.
+- **CLV Scanner**: scans matchup slates and ranks opportunities by raw CLV magnitude.
+- Peak irrationality defaults: 5-vs-12 seed matchups in R64.
+
+#### 2.3 RL Bracket Optimization (`src/simulation/rl_bracket.py`)
+- Lightweight RL pool environment simulating 1,000+ "Dumb Brackets" from public pick percentages.
+- **Greedy Leverage Agent** selects picks that maximize Leverage Score while maintaining viability.
+- Achieves **Top-10 rate ~48%, Win rate ~18%** against 100-entry pools in Monte Carlo testing.
+
+---
+
+*Last updated: 2026-03-11 — Boss-Level Mathematical Upgrades added (Pillars 1-2). All 57 tests pass.*
+
+---
+
+## 10. Agentic Workflow Rules & Developer Principles
+
+### 10.1 Plan Node Default
+- Enter plan mode for ANY non-trivial task (3+ steps or architectural decisions).
+- If something goes sideways, STOP and re-plan immediately - don't keep pushing.
+- Use plan mode for verification steps, not just building.
+- Write detailed specs upfront to reduce ambiguity.
+
+### 10.2 Subagent Strategy
+- Use subagents liberally to keep main context window clean.
+- Offload research, exploration, and parallel analysis to subagents.
+- For complex problems, throw more compute at it via subagents.
+- One task per subagent for focused execution.
+
+### 10.3 Self-Improvement Loop
+- After ANY correction from the user: update `tasks/lessons.md` with the pattern.
+- Write rules for yourself that prevent the same mistake.
+- Ruthlessly iterate on these lessons until mistake rate drops.
+- Review lessons at session start for relevant project.
+
+### 10.4 Verification Before Done
+- Never mark a task complete without proving it works.
+- Diff behavior between main and your changes when relevant.
+- Ask yourself: "Would a staff engineer approve this?"
+- Run tests, check logs, demonstrate correctness.
+
+### 10.5 Demand Elegance (Balanced)
+- For non-trivial changes: pause and ask "is there a more elegant way?"
+- If a fix feels hacky: "Knowing everything I know now, implement the elegant solution"
+- Skip this for simple, obvious fixes - don't over-engineer.
+- Challenge your own work before presenting it.
+
+### 10.6 Autonomous Bug Fixing
+- When given a bug report: just fix it. Don't ask for hand-holding.
+- Point at logs, errors, failing tests - then resolve them.
+- Zero context switching required from the user.
+- Go fix failing CI tests without being told how.
+
+## 11. Task Management
+
+1. **Plan First**: Write plan to `tasks/todo.md` with checkable items.
+2. **Verify Plan**: Check in before starting implementation.
+3. **Track Progress**: Mark items complete as you go.
+4. **Explain Changes**: High-level summary at each step.
+5. **Document Results**: Add review section to `tasks/todo.md`.
+6. **Capture Lessons**: Update `tasks/lessons.md` after corrections.
+
+## 12. Core Principles
+
+- **Simplicity First**: Make every change as simple as possible. Impact minimal code.
+- **No Laziness**: Find root causes. No temporary fixes. Senior developer standards.
+
+---
+
+## 13. Frontend Codebase Notes (React / Three.js / Next.js)
+
+- `parseInt("55-23")` → `55` (wins only). Use `parseInt(s.split('-')[0], 10) || 0` for W-L record strings.
+- `new THREE.Color(node.color)` fails with raw int — always use `` `#${n.toString(16).padStart(6,'0')}` ``.
+- Wrap `new THREE.Color()` / `new THREE.Vector3()` in `useMemo([dep])` inside R3F components — instantiating in render body causes per-frame material re-uploads.
+- React Rules of Hooks: `useMemo`/`useCallback`/`useEffect` must appear **before** any `if (!x) return null` guard.
+- R3F disposal: `useEffect` cleanup must call `.dispose()` on texture **and** geometry **and** material separately.
+- `useFrame` with 360+ nodes: gate rotation/animation on `hovered || isSelected` — unconditional `useFrame` on all nodes saturates the JS thread at ~23k mutations/sec.
+- `AnimatePresence mode="wait"` is required on panel sidebars — without it, exit and enter animations overlap producing ghost panels.
+- `probToHeatColor` must return `rgb(r,g,b)` (no spaces, no alpha channel) — vitest regex `^rgb\(\d+,\d+,\d+\)$` tests this.
+- R3F edge arrays: use content-based keys (`source-target`) not array index — index keys cause full re-mounts when graph data refreshes.
+- Frontend vitest: ~5s. Backend pytest: ~20s. Run `npx vitest run --reporter=dot` for fast iteration.

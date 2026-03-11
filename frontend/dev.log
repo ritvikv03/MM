@@ -1,0 +1,70 @@
+
+> ethereal-oracle@0.1.0 dev
+> next dev
+
+ ⚠ Port 3000 is in use, trying 3001 instead.
+ ⚠ Port 3001 is in use, trying 3002 instead.
+  ▲ Next.js 14.2.3
+  - Local:        http://localhost:3002
+
+ ✓ Starting...
+ ✓ Ready in 6.1s
+ ○ Compiling / ...
+ ✓ Compiled / in 21.5s (1251 modules)
+ GET / 200 in 23008ms
+ GET / 200 in 2331ms
+ ✓ Compiled in 5.4s (1233 modules)
+ GET / 200 in 930ms
+<w> [webpack.cache.PackFileCacheStrategy] Caching failed for pack: Error: ENOENT: no such file or directory, rename '/Users/ritvikvasikarla/Documents/MM/frontend/.next/cache/webpack/client-development/3.pack.gz_' -> '/Users/ritvikvasikarla/Documents/MM/frontend/.next/cache/webpack/client-development/3.pack.gz'
+ ✓ Compiled in 990ms (1233 modules)
+ ✓ Compiled in 183ms (626 modules)
+ ✓ Compiled in 208ms (626 modules)
+ ✓ Compiled in 134ms (626 modules)
+ ✓ Compiled in 568ms (1233 modules)
+ ✓ Compiled in 281ms (1233 modules)
+ ✓ Compiled in 193ms (1233 modules)
+ ✓ Compiled in 5.8s (2394 modules)
+ ✓ Compiled in 175ms (1207 modules)
+ ✓ Compiled in 689ms (2398 modules)
+ ✓ Compiled in 3.9s (2398 modules)
+ ✓ Compiled in 419ms (2398 modules)
+<w> [webpack.cache.PackFileCacheStrategy] Caching failed for pack: Error: ENOENT: no such file or directory, rename '/Users/ritvikvasikarla/Documents/MM/frontend/.next/cache/webpack/client-development/0.pack.gz_' -> '/Users/ritvikvasikarla/Documents/MM/frontend/.next/cache/webpack/client-development/0.pack.gz'
+<w> [webpack.cache.PackFileCacheStrategy] Caching failed for pack: Error: ENOENT: no such file or directory, rename '/Users/ritvikvasikarla/Documents/MM/frontend/.next/cache/webpack/server-development/3.pack.gz_' -> '/Users/ritvikvasikarla/Documents/MM/frontend/.next/cache/webpack/server-development/3.pack.gz'
+ ✓ Compiled in 576ms (2398 modules)
+ ✓ Compiled in 326ms (2398 modules)
+ ✓ Compiled in 289ms (2398 modules)
+ ✓ Compiled in 596ms (2398 modules)
+ ✓ Compiled in 364ms (2398 modules)
+ ✓ Compiled in 302ms (2398 modules)
+ ✓ Compiled in 301ms (2398 modules)
+ ✓ Compiled in 371ms (2398 modules)
+ ✓ Compiled in 379ms (2398 modules)
+ ✓ Compiled in 309ms (2398 modules)
+ ✓ Compiled in 491ms (2398 modules)
+ ✓ Compiled in 388ms (2398 modules)
+ ✓ Compiled in 311ms (2398 modules)
+ ✓ Compiled in 336ms (2398 modules)
+ ✓ Compiled in 552ms (2398 modules)
+ ✓ Compiled in 435ms (2398 modules)
+<w> [webpack.cache.PackFileCacheStrategy] Caching failed for pack: Error: ENOENT: no such file or directory, rename '/Users/ritvikvasikarla/Documents/MM/frontend/.next/cache/webpack/server-development/0.pack.gz_' -> '/Users/ritvikvasikarla/Documents/MM/frontend/.next/cache/webpack/server-development/0.pack.gz'
+ ✓ Compiled in 513ms (2398 modules)
+ ✓ Compiled in 865ms (2398 modules)
+ ✓ Compiled in 416ms (2398 modules)
+ ✓ Compiled in 422ms (2398 modules)
+ ✓ Compiled in 381ms (2398 modules)
+ ✓ Compiled in 526ms (2398 modules)
+<w> [webpack.cache.PackFileCacheStrategy] Caching failed for pack: Error: ENOENT: no such file or directory, rename '/Users/ritvikvasikarla/Documents/MM/frontend/.next/cache/webpack/client-development/0.pack.gz_' -> '/Users/ritvikvasikarla/Documents/MM/frontend/.next/cache/webpack/client-development/0.pack.gz'
+ ✓ Compiled in 435ms (2398 modules)
+ ✓ Compiled in 582ms (2398 modules)
+ ✓ Compiled in 369ms (2398 modules)
+ ✓ Compiled in 412ms (2398 modules)
+ ✓ Compiled in 358ms (2398 modules)
+ ✓ Compiled in 536ms (2398 modules)
+ ✓ Compiled in 474ms (2398 modules)
+ ✓ Compiled in 393ms (2398 modules)
+ ✓ Compiled in 479ms (2398 modules)
+ ✓ Compiled in 642ms (2398 modules)
+ ✓ Compiled in 1346ms (2398 modules)
+ ✓ Compiled in 1968ms (2398 modules)
+ ✓ Compiled in 1671ms (2398 modules)
+ ✓ Compiled in 1494ms (2398 modules)

@@ -91,7 +91,11 @@ def mock_pm_az():
 
 @pytest.fixture()
 def small_game_data():
-    """Tiny synthetic dataset: G=5 games, embedding_dim=4."""
+    """Tiny synthetic dataset: G=5 games, embedding_dim=4.
+
+    Note: y_total is intentionally absent — game totals are permanently
+    excluded from the two-target architecture (win prob + spread only).
+    """
     rng = np.random.default_rng(0)
     G, D = 5, 4
     return {
@@ -103,7 +107,6 @@ def small_game_data():
         "away_seed": rng.integers(0, 4, size=G),
         "y_win": rng.integers(0, 2, size=G).astype(np.float32),
         "y_spread": rng.standard_normal(G).astype(np.float32) * 10,
-        "y_total": (rng.standard_normal(G).astype(np.float32) * 10 + 140),
     }
 
 
@@ -215,12 +218,22 @@ class TestBuildModel:
         sigmas_10 = [c for c in pm.HalfNormal.call_args_list if 10.0 in c[0] or c[1].get("sigma") == 10.0]
         assert len(sigmas_10) >= 1
 
-    def test_half_normal_sigma_total_called(self, head_advi, mock_pm_az, small_game_data):
-        """sigma_total ~ HalfNormal(15.0) must be created."""
+    def test_luck_scale_halfnormal_called(self, head_advi, mock_pm_az, small_game_data):
+        """luck_scale ~ HalfNormal(sigma=0.15) must be created for LLN regression prior."""
+        module, pm, *_ = mock_pm_az
+        head_advi.build_model(**small_game_data)
+        sigmas_015 = [
+            c for c in pm.HalfNormal.call_args_list
+            if 0.15 in c[0] or c[1].get("sigma") == pytest.approx(0.15)
+        ]
+        assert len(sigmas_015) >= 1
+
+    def test_no_obs_total_halfnormal(self, head_advi, mock_pm_az, small_game_data):
+        """sigma_total ~ HalfNormal(15.0) must NOT be created (totals permanently removed)."""
         module, pm, *_ = mock_pm_az
         head_advi.build_model(**small_game_data)
         sigmas_15 = [c for c in pm.HalfNormal.call_args_list if 15.0 in c[0] or c[1].get("sigma") == 15.0]
-        assert len(sigmas_15) >= 1
+        assert len(sigmas_15) == 0
 
     def test_pm_normal_called_for_conf_effect(self, head_advi, mock_pm_az, small_game_data):
         """conf_effect ~ Normal(0, sigma_conf, shape=n_conferences)."""
@@ -244,12 +257,12 @@ class TestBuildModel:
         shapes = [c[1].get("shape") for c in pm.Normal.call_args_list]
         assert head_advi.embedding_dim in shapes
 
-    def test_pm_data_called_for_mu_total_base(self, head_advi, mock_pm_az, small_game_data):
-        """pm.Data('mu_total_base', ...) must be registered."""
+    def test_pm_data_not_called_for_mu_total_base(self, head_advi, mock_pm_az, small_game_data):
+        """pm.Data('mu_total_base') must NOT be called — totals are permanently removed."""
         module, pm, *_ = mock_pm_az
         head_advi.build_model(**small_game_data)
         data_names = [c[0][0] for c in pm.Data.call_args_list]
-        assert "mu_total_base" in data_names
+        assert "mu_total_base" not in data_names
 
     def test_pm_bernoulli_called_for_obs_win(self, head_advi, mock_pm_az, small_game_data):
         """obs_win ~ Bernoulli(p=p_win, observed=y_win)."""
@@ -261,12 +274,12 @@ class TestBuildModel:
         """obs_spread ~ Normal(mu=delta, sigma=sigma_spread, observed=y_spread)."""
         module, pm, *_ = mock_pm_az
         head_advi.build_model(**small_game_data)
-        # Verify Normal is called with observed= matching y_spread
+        # Verify Normal is called with observed= for spread (no total in two-target model)
         observed_arrays = [
             c[1].get("observed") for c in pm.Normal.call_args_list
             if c[1].get("observed") is not None
         ]
-        assert len(observed_arrays) >= 2  # spread + total
+        assert len(observed_arrays) >= 1
 
     def test_pm_math_sigmoid_called_for_p_win(self, head_advi, mock_pm_az, small_game_data):
         """pm.math.sigmoid(delta) must be called to obtain p_win."""
@@ -274,25 +287,33 @@ class TestBuildModel:
         head_advi.build_model(**small_game_data)
         pm.math.sigmoid.assert_called()
 
-    def test_mu_total_base_has_correct_length(self, head_advi, mock_pm_az, small_game_data):
-        """mu_total_base array must have length == number of games."""
+    def test_luck_obs_normal_called_with_luck_data(self, head_advi, mock_pm_az, small_game_data):
+        """When home_luck and away_luck provided, Normal obs priors are created."""
         module, pm, *_ = mock_pm_az
-        head_advi.build_model(**small_game_data)
-        G = len(small_game_data["y_total"])
-        data_calls = pm.Data.call_args_list
-        mu_call = [c for c in data_calls if c[0][0] == "mu_total_base"]
-        assert len(mu_call) == 1
-        arr = mu_call[0][0][1]
-        assert len(arr) == G
+        rng = np.random.default_rng(77)
+        G = len(small_game_data["y_win"])
+        luck_data = {
+            **small_game_data,
+            "home_luck": rng.uniform(0.3, 0.7, G).astype(np.float32),
+            "away_luck": rng.uniform(0.3, 0.7, G).astype(np.float32),
+        }
+        head_advi.build_model(**luck_data)
+        # Two additional Normal calls with observed= for luck priors
+        observed_arrays = [
+            c[1].get("observed") for c in pm.Normal.call_args_list
+            if c[1].get("observed") is not None
+        ]
+        assert len(observed_arrays) >= 3  # spread + obs_home_luck + obs_away_luck
 
-    def test_mu_total_base_values_are_140(self, head_advi, mock_pm_az, small_game_data):
-        """mu_total_base should be filled with 140.0."""
+    def test_luck_obs_normal_not_called_without_luck_data(self, head_advi, mock_pm_az, small_game_data):
+        """Without luck data, only obs_spread Normal should have observed=."""
         module, pm, *_ = mock_pm_az
         head_advi.build_model(**small_game_data)
-        data_calls = pm.Data.call_args_list
-        mu_call = [c for c in data_calls if c[0][0] == "mu_total_base"]
-        arr = mu_call[0][0][1]
-        np.testing.assert_array_equal(arr, np.full(len(arr), 140.0))
+        observed_arrays = [
+            c[1].get("observed") for c in pm.Normal.call_args_list
+            if c[1].get("observed") is not None
+        ]
+        assert len(observed_arrays) == 1  # spread only
 
 
 # ===========================================================================
