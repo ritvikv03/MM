@@ -11,6 +11,7 @@ Build a novel predictive model to find **Closing Line Value (CLV)** and maximize
 - Move entirely away from point-estimate tabular classification (e.g., scikit-learn / XGBoost pipelines).
 - Leverage a **Spatio-Temporal Graph Neural Network (ST-GNN)** combined with **Bayesian Inference**.
 - All model outputs must be **probability distributions** of game outcomes, not scalar win-probability estimates.
+- The model optimizes for **two targets only**: binary win/loss probability and point spread (margin of victory). Game totals are excluded — see §2 Probabilistic Modeling for rationale.
 - Distributions feed downstream into:
   - **Monte Carlo Bracket Simulations** (full bracket path probability)
   - **Kelly Criterion betting** (fractional Kelly sizing from edge + variance estimates)
@@ -26,17 +27,23 @@ Build a novel predictive model to find **Closing Line Value (CLV)** and maximize
 ## 2. Technology Stack
 
 ### Graph Processing
-- **PyTorch Geometric (PyG)** — model the NCAA season as a dynamic directed graph
+- **PyTorch Geometric (PyG)** — model the NCAA season as a **Heterogeneous Graph** with two distinct node types
   - **Graph Attention Networks (GAT)** for spatial Strength-of-Schedule encoding
   - **LSTM / Transformer layers** for temporal momentum (rolling game-by-game sequences)
-  - Each node = a team; each edge = a game played (directed, weighted by margin/efficiency delta)
+  - **Node Types (Heterogeneous Graph):**
+    - **Team Nodes** — one per D-I program; features = efficiency metrics, availability, roster continuity
+    - **Conference Nodes** — one per conference (ACC, Big 12, SEC, MAC, etc.); features = conference-level adjusted efficiency aggregates
+    - Every Team Node must be connected to its primary Conference Node via a directed `member_of` edge. This allows the GAT to explicitly model inter-conference strength disparities (e.g., an average Big 12 team vs. a dominant MAC team) rather than treating all teams in a contextual silo.
+  - Each game edge = directed Team→Team, weighted by margin/efficiency delta
   - **Edge Features:** Must explicitly encode Court Location (Home/Away/Neutral) and Rest Disparity (days since last game for both teams). Tournament games are played on neutral courts; the GAT must be able to isolate neutral-court baseline strength from home-court inflation.
 
 ### Probabilistic Modeling
 - **PyMC** (preferred) or **Stan** for Bayesian multi-task outcome generation
-  - Posterior distributions over win probability, point spread, and total
+  - Posterior distributions over **win probability** and **point spread (margin of victory) only**
+  - **Game Totals are permanently excluded from the model objective.** End-of-game fouling protocols introduce noise that has no mathematical bearing on team quality, Brier Score accuracy, or CLV. Do not add an `obs_total` likelihood term to the PyMC model. Do not predict, log, or backtest total points.
   - Hierarchical priors over conferences and seeds
   - MCMC / NUTS sampler for credible intervals
+  - **Clutch/Luck Regression Prior (mandatory):** The Bayesian head must encode an explicit shrinkage prior on "clutch" performance metrics sourced from Barttorvik's Luck metric and close-game win percentage (games decided by ≤3 points). Mathematically, over a 35-game NCAA regular season sample, close-game outcomes revert strongly to mean. Implement this as a `pm.Beta` or `pm.Normal` prior centered at 0.5 with a tight sigma (≤0.15) on the luck/clutch parameter, so that a team going 10-0 in close games has its posterior win-probability distribution penalized downward toward average volatility rather than being treated as a genuine skill signal. This prior must be documented in the model's docstring with the cite: "Law of Large Numbers regression over 35-game samples."
   - **Compute Optimization:** For local TDD and prototyping, default PyMC to Variational Inference (ADVI) or limit MCMC chains/draws to prevent hanging. Full NUTS sampling and PyG training sweeps should be configurable via CLI flags to run on cloud/GPU infrastructure when ready.
 
 ### MLOps Tracker
@@ -237,4 +244,4 @@ Tag each run with `season=YYYY` and `model_version=vX.Y`.
 
 ---
 
-*Last updated: 2026-03-10 — free-tier-only mandate applied; KenPom, EvanMiya, ShotQuality, Twitter/X, The Odds API, and Action Network permanently removed.*
+*Last updated: 2026-03-10 — Architecture locked. Three refinements applied: (1) Heterogeneous Graph with Conference Nodes + member_of edges; (2) Clutch/Luck regression-to-mean prior in PyMC head; (3) Game Totals permanently removed from model objective — win probability and spread only.*
