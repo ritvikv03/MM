@@ -89,12 +89,14 @@ Build a novel predictive model to find **Closing Line Value (CLV)** and maximize
 - **Barttorvik Player Data** — replaces EvanMiya entirely (see §3.2 above)
   - PORPAGATU! and BPM tables scraped directly from `barttorvik.com`
   - **EvanMiya is permanently removed.** Do not create or maintain `src/data/evanmiya.py`.
-- **Hoop-Math** (free, public scraping)
-  - Transition vs. half-court efficiency splits
-  - **Rim rate is our primary proxy for offensive/defensive shot quality** — replaces ShotQuality.com entirely
-  - Rim rate, mid-range rate, three-point rate (offense and defense)
+- **Sports Reference CBB** (free, public — replaces defunct Hoop-Math)
+  - `hoop-math.com` domain is dead (DNS does not resolve as of 2026-03-10). **Do not attempt to scrape it.**
+  - Use `sports-reference.com/cbb/seasons/men/{year}-school-stats.html` for shot-type proxies
+  - Scrape: 3PA rate (3PA/FGA), FTA rate (FTA/FGA), eFG% — these serve as rim-rate, perimeter, and quality proxies
+  - **3PA rate** = inverse proxy for rim/mid-range tendency (low 3PA rate → more interior shots)
+  - **FTA rate** = proxy for attacking the rim (high FTA rate → high rim-attempt tendency)
   - **ShotQuality.com is permanently removed.** Do not create or maintain `src/data/shotquality.py`.
-  - Module: `src/data/hoopmath.py`
+  - Module: `src/data/hoopmath.py` (rewritten to scrape Sports Reference)
 
 ### 3.4 Injury / Roster Availability
 - **Rotowire CBB** injury pages — **sole injury source**
