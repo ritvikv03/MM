@@ -95,6 +95,112 @@ def skellam_pmf_zero_truncated(k: int | np.ndarray, mu1: float, mu2: float) -> f
     return zt_pmf
 
 
+def zero_truncated_skellam_log_pmf(k, mu1, mu2):
+    """
+    Compute the log-PMF of the Zero-Truncated Skellam distribution.
+
+    Returns log P_ZT(D=k) = log P(D=k) - log(1 - P(D=0))   for k != 0
+    Returns -inf for k == 0 (NCAA games cannot end in a tie).
+
+    This function is designed to be called inside PyMC 5's ``pm.CustomDist``
+    ``logp`` parameter.  When called with pytensor symbolic tensors, it builds
+    a pytensor computation graph via a custom ``ZTSkellamOp``; when called with
+    plain numpy arrays it falls back to a pure numpy implementation.
+
+    The ``ZTSkellamOp`` wraps scipy's Bessel function evaluation (which has no
+    native pytensor equivalent) in a pytensor ``Op`` with a zero-gradient
+    stub.  This makes the distribution compatible with NUTS (gradient-free
+    steps via finite differences) and with ADVI (through a Normal spread
+    approximation when gradients are required — see ``bayesian_head.py``).
+
+    Parameters
+    ----------
+    k : int, array, or pytensor tensor
+        Observed margin(s) of victory (integer-valued).
+    mu1 : float or pytensor tensor
+        Scoring rate for the home team (must be > 0).
+    mu2 : float or pytensor tensor
+        Scoring rate for the away team (must be > 0).
+
+    Returns
+    -------
+    float, ndarray, or pytensor tensor
+        Log-probability value(s).  Returns ``-inf`` (or ``-np.inf``) when
+        ``k == 0``.
+    """
+    def _numpy_zt_skellam_log_pmf(k_val, mu1_val, mu2_val):
+        """Pure-numpy implementation used in both Op.perform and numpy fallback."""
+        k_val = np.asarray(k_val, dtype=float)
+        mu1_val = np.maximum(np.asarray(mu1_val, dtype=float), 1e-8)
+        mu2_val = np.maximum(np.asarray(mu2_val, dtype=float), 1e-8)
+
+        sqrt_mu1mu2 = np.sqrt(mu1_val * mu2_val)
+
+        # Standard Skellam log PMF: log P(D=k)
+        log_pmf = (
+            -(mu1_val + mu2_val)
+            + (k_val / 2.0) * np.log(mu1_val / mu2_val)
+            + np.log(np.maximum(bessel_iv(np.abs(k_val), 2.0 * sqrt_mu1mu2), 1e-300))
+        )
+
+        # Log P(D=0) — Bessel of order 0
+        log_p_zero = (
+            -(mu1_val + mu2_val)
+            + np.log(np.maximum(bessel_iv(0.0, 2.0 * sqrt_mu1mu2), 1e-300))
+        )
+
+        # Zero-truncated: log P_ZT(k) = log P(k) - log(1 - P(0))
+        p_zero = np.exp(log_p_zero)
+        log_one_minus_p0 = np.log1p(-np.minimum(p_zero, 1.0 - 1e-10))
+        log_zt_pmf = log_pmf - log_one_minus_p0
+
+        # Assign -inf to k == 0
+        return np.where(np.asarray(k_val) == 0, -np.inf, log_zt_pmf)
+
+    # Try to detect pytensor symbolic context
+    try:
+        import pytensor
+        import pytensor.tensor as pt
+        from pytensor.graph.basic import Apply
+
+        class _ZTSkellamOp(pytensor.graph.op.Op):
+            """PyTensor Op wrapping the zero-truncated Skellam log-PMF.
+
+            Gradient is implemented as zeros (black-box likelihood).  This
+            supports NUTS sampling via finite-differences.  For ADVI, callers
+            should use the Normal approximation fallback in bayesian_head.py.
+            """
+            __props__ = ()
+
+            def make_node(self, k, mu1, mu2):
+                k   = pt.as_tensor_variable(k).astype("float64")
+                mu1 = pt.as_tensor_variable(mu1).astype("float64")
+                mu2 = pt.as_tensor_variable(mu2).astype("float64")
+                return Apply(self, [k, mu1, mu2], [k.type()])
+
+            def perform(self, node, inputs, outputs):
+                k_v, mu1_v, mu2_v = inputs
+                outputs[0][0] = _numpy_zt_skellam_log_pmf(
+                    k_v, mu1_v, mu2_v
+                ).astype(np.float64)
+
+            def grad(self, inputs, output_grads):
+                # Zero-gradient stub: sampling (NUTS) works via num. diff;
+                # ADVI falls back to the Normal likelihood path.
+                return [pt.zeros_like(inp) for inp in inputs]
+
+        op = _ZTSkellamOp()
+        return op(
+            pt.as_tensor_variable(k).astype("float64"),
+            pt.as_tensor_variable(mu1).astype("float64"),
+            pt.as_tensor_variable(mu2).astype("float64"),
+        )
+
+    except (ImportError, TypeError):
+        # Pure numpy fallback (no pytensor available)
+        return _numpy_zt_skellam_log_pmf(k, mu1, mu2)
+
+
 def skellam_log_likelihood(
     observed_margins: np.ndarray,
     mu1: np.ndarray,

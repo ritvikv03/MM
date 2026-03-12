@@ -66,6 +66,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from src.model.skellam import zero_truncated_skellam_log_pmf
+
 if TYPE_CHECKING:
     import pymc as pm
     import arviz as az
@@ -119,7 +121,12 @@ class BayesianHead:
         nuts_chains: int = 2,
         nuts_tune: int = 200,
         random_seed: int = 42,
+        use_skellam: bool = True,
     ) -> None:
+        if not isinstance(use_skellam, bool):
+            raise TypeError(
+                f"use_skellam must be a bool, got {type(use_skellam).__name__!r}"
+            )
         self.embedding_dim = embedding_dim
         self.n_conferences = n_conferences
         self.n_seeds = n_seeds
@@ -130,6 +137,7 @@ class BayesianHead:
         self.nuts_chains = nuts_chains
         self.nuts_tune = nuts_tune
         self.random_seed = random_seed
+        self.use_skellam = use_skellam
 
     # ------------------------------------------------------------------
     # build_model
@@ -264,11 +272,42 @@ class BayesianHead:
             p_win = pm.math.sigmoid(delta)
             obs_win = pm.Bernoulli("obs_win", p=p_win, observed=y_win)
 
-            # ---- 8. Spread — Normal likelihood -----------------------------
-            sigma_spread = pm.HalfNormal("sigma_spread", sigma=10.0)
-            obs_spread = pm.Normal(
-                "obs_spread", mu=delta, sigma=sigma_spread, observed=y_spread
-            )
+            # ---- 8. Spread likelihood — Zero-Truncated Skellam or Normal ---
+            if self.use_skellam:
+                # Skellam spread likelihood:
+                #   mu_home = exp(log_base_rate + delta/2)
+                #   mu_away = exp(log_base_rate - delta/2)
+                # where log_base_rate ~ Normal(log(75), 0.3) encodes the
+                # prior that average NCAA team scores ~75 points.
+                # Guarantees P(tie) = 0 via zero-truncation (NCAA OT rules).
+                log_base_rate = pm.Normal(
+                    "log_base_rate",
+                    mu=float(np.log(75)),
+                    sigma=0.3,
+                )
+                mu_home = pm.Deterministic(
+                    "mu_home", pm.math.exp(log_base_rate + delta / 2.0)
+                )
+                mu_away = pm.Deterministic(
+                    "mu_away", pm.math.exp(log_base_rate - delta / 2.0)
+                )
+
+                def _skellam_logp(value, mu_home, mu_away):
+                    return zero_truncated_skellam_log_pmf(value, mu_home, mu_away)
+
+                obs_spread = pm.CustomDist(
+                    "obs_spread",
+                    mu_home,
+                    mu_away,
+                    logp=_skellam_logp,
+                    observed=y_spread,
+                )
+            else:
+                # Fallback: Normal spread likelihood (backward-compatible).
+                sigma_spread = pm.HalfNormal("sigma_spread", sigma=10.0)
+                obs_spread = pm.Normal(
+                    "obs_spread", mu=delta, sigma=sigma_spread, observed=y_spread
+                )
 
         return model
 

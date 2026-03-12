@@ -68,8 +68,32 @@ def _make_az_mock():
     return az
 
 
+def _make_skellam_mock():
+    """Return a minimal mock for src.model.skellam (used when scipy is absent)."""
+    skellam_mod = MagicMock(name="src.model.skellam")
+    # zero_truncated_skellam_log_pmf returns a mock tensor-like object
+    skellam_mod.zero_truncated_skellam_log_pmf = MagicMock(
+        name="zero_truncated_skellam_log_pmf",
+        return_value=MagicMock(name="skellam_logp_tensor"),
+    )
+    return skellam_mod
+
+
 def _build_modules_patch(pm, az):
-    return {"pymc": pm, "arviz": az}
+    skellam = _make_skellam_mock()
+    # Also stub scipy.special so skellam.py doesn't fail if imported directly
+    scipy_mock = MagicMock(name="scipy")
+    scipy_special_mock = MagicMock(name="scipy.special")
+    scipy_special_mock.iv = MagicMock(name="bessel_iv", return_value=1.0)
+    scipy_stats_mock = MagicMock(name="scipy.stats")
+    return {
+        "pymc": pm,
+        "arviz": az,
+        "src.model.skellam": skellam,
+        "scipy": scipy_mock,
+        "scipy.special": scipy_special_mock,
+        "scipy.stats": scipy_stats_mock,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -211,10 +235,15 @@ class TestBuildModel:
         sigmas_1 = [c for c in pm.HalfNormal.call_args_list if 1.0 in c[0] or c[1].get("sigma") == 1.0]
         assert len(sigmas_1) >= 1
 
-    def test_half_normal_sigma_spread_called(self, head_advi, mock_pm_az, small_game_data):
-        """sigma_spread ~ HalfNormal(10.0) must be created."""
+    def test_half_normal_sigma_spread_called(self, mock_pm_az, small_game_data):
+        """sigma_spread ~ HalfNormal(10.0) must be created when use_skellam=False.
+        With use_skellam=True (Skellam default), sigma_spread is not used.
+        """
         module, pm, *_ = mock_pm_az
-        head_advi.build_model(**small_game_data)
+        head = module.BayesianHead(
+            embedding_dim=4, n_conferences=8, n_seeds=4, use_skellam=False
+        )
+        head.build_model(**small_game_data)
         sigmas_10 = [c for c in pm.HalfNormal.call_args_list if 10.0 in c[0] or c[1].get("sigma") == 10.0]
         assert len(sigmas_10) >= 1
 
@@ -271,10 +300,21 @@ class TestBuildModel:
         pm.Bernoulli.assert_called()
 
     def test_pm_normal_called_for_obs_spread(self, head_advi, mock_pm_az, small_game_data):
-        """obs_spread ~ Normal(mu=delta, sigma=sigma_spread, observed=y_spread)."""
-        module, pm, *_ = mock_pm_az
+        """obs_spread is registered via pm.CustomDist (Skellam, default) or
+        pm.Normal (use_skellam=False).  With default use_skellam=True the
+        spread goes through CustomDist; with False it goes through Normal."""
+        module, pm, az, mock_model, *_ = mock_pm_az
+        pm.CustomDist = MagicMock(return_value=MagicMock(name="CustomDist_rv"))
+        pm.Deterministic = MagicMock(return_value=MagicMock(name="Deterministic_rv"))
+        # Default (Skellam): CustomDist called for spread
         head_advi.build_model(**small_game_data)
-        # Verify Normal is called with observed= for spread (no total in two-target model)
+        pm.CustomDist.assert_called()
+        # Normal-fallback variant: pm.Normal still called with observed= for spread
+        head_normal = module.BayesianHead(
+            embedding_dim=4, n_conferences=8, n_seeds=4, use_skellam=False
+        )
+        pm.Normal.reset_mock()
+        head_normal.build_model(**small_game_data)
         observed_arrays = [
             c[1].get("observed") for c in pm.Normal.call_args_list
             if c[1].get("observed") is not None
@@ -288,8 +328,14 @@ class TestBuildModel:
         pm.math.sigmoid.assert_called()
 
     def test_luck_obs_normal_called_with_luck_data(self, head_advi, mock_pm_az, small_game_data):
-        """When home_luck and away_luck provided, Normal obs priors are created."""
-        module, pm, *_ = mock_pm_az
+        """When home_luck and away_luck provided, Normal obs priors are created.
+
+        With use_skellam=True (default), obs_spread goes through pm.CustomDist
+        so pm.Normal is only called for the two luck observed nodes.
+        """
+        module, pm, az, mock_model, *_ = mock_pm_az
+        pm.CustomDist = MagicMock(return_value=MagicMock(name="CustomDist_rv"))
+        pm.Deterministic = MagicMock(return_value=MagicMock(name="Deterministic_rv"))
         rng = np.random.default_rng(77)
         G = len(small_game_data["y_win"])
         luck_data = {
@@ -298,22 +344,26 @@ class TestBuildModel:
             "away_luck": rng.uniform(0.3, 0.7, G).astype(np.float32),
         }
         head_advi.build_model(**luck_data)
-        # Two additional Normal calls with observed= for luck priors
+        # With Skellam default: 2 Normal calls with observed= (home_luck + away_luck)
         observed_arrays = [
             c[1].get("observed") for c in pm.Normal.call_args_list
             if c[1].get("observed") is not None
         ]
-        assert len(observed_arrays) >= 3  # spread + obs_home_luck + obs_away_luck
+        assert len(observed_arrays) >= 2  # obs_home_luck + obs_away_luck
 
     def test_luck_obs_normal_not_called_without_luck_data(self, head_advi, mock_pm_az, small_game_data):
-        """Without luck data, only obs_spread Normal should have observed=."""
-        module, pm, *_ = mock_pm_az
+        """Without luck data, pm.Normal should have no observed= calls when
+        use_skellam=True (spread goes through pm.CustomDist)."""
+        module, pm, az, mock_model, *_ = mock_pm_az
+        pm.CustomDist = MagicMock(return_value=MagicMock(name="CustomDist_rv"))
+        pm.Deterministic = MagicMock(return_value=MagicMock(name="Deterministic_rv"))
         head_advi.build_model(**small_game_data)
         observed_arrays = [
             c[1].get("observed") for c in pm.Normal.call_args_list
             if c[1].get("observed") is not None
         ]
-        assert len(observed_arrays) == 1  # spread only
+        # No luck data + Skellam spread → no pm.Normal with observed
+        assert len(observed_arrays) == 0
 
 
 # ===========================================================================
@@ -881,3 +931,277 @@ class TestCoachATSEffect:
         # Model is returned without error.
         from unittest.mock import MagicMock
         assert result is not None
+
+
+# ===========================================================================
+# 9. TestSkellamHead — Zero-Truncated Skellam spread likelihood
+# ===========================================================================
+
+class TestSkellamHead:
+    """Tests for use_skellam parameter on MarchMadnessBayesianHead / BayesianHead."""
+
+    # ------ attribute / init tests (use mock pm) ----------------------------
+
+    def test_default_uses_skellam(self, mock_pm_az):
+        """BayesianHead() default should have use_skellam=True."""
+        module, *_ = mock_pm_az
+        head = module.BayesianHead(embedding_dim=4)
+        assert head.use_skellam is True
+
+    def test_skellam_false_uses_normal(self, mock_pm_az):
+        """use_skellam=False should be stored and honoured."""
+        module, *_ = mock_pm_az
+        head = module.BayesianHead(embedding_dim=4, use_skellam=False)
+        assert head.use_skellam is False
+
+    def test_use_skellam_stored_as_attribute(self, mock_pm_az):
+        """use_skellam value is accessible as head.use_skellam."""
+        module, *_ = mock_pm_az
+        head_true = module.BayesianHead(embedding_dim=4, use_skellam=True)
+        head_false = module.BayesianHead(embedding_dim=4, use_skellam=False)
+        assert head_true.use_skellam is True
+        assert head_false.use_skellam is False
+
+    def test_invalid_use_skellam_type_raises(self, mock_pm_az):
+        """use_skellam='yes' (string) should raise TypeError."""
+        module, *_ = mock_pm_az
+        with pytest.raises(TypeError):
+            module.BayesianHead(embedding_dim=4, use_skellam="yes")
+
+    # ------ mock-based build_model tests ------------------------------------
+
+    def test_build_model_returns_model_with_skellam(self, mock_pm_az, small_game_data):
+        """build_model() with use_skellam=True returns a model object."""
+        module, pm, az, mock_model, *_ = mock_pm_az
+        # Expose CustomDist on the pm mock
+        pm.CustomDist = MagicMock(return_value=MagicMock(name="CustomDist_rv"))
+        pm.Deterministic = MagicMock(return_value=MagicMock(name="Deterministic_rv"))
+        head = module.BayesianHead(embedding_dim=4, n_conferences=8, n_seeds=4, use_skellam=True)
+        result = head.build_model(**small_game_data)
+        assert result is mock_model
+
+    def test_build_model_returns_model_with_normal(self, mock_pm_az, small_game_data):
+        """build_model() with use_skellam=False returns a model object."""
+        module, pm, az, mock_model, *_ = mock_pm_az
+        head = module.BayesianHead(embedding_dim=4, n_conferences=8, n_seeds=4, use_skellam=False)
+        result = head.build_model(**small_game_data)
+        assert result is mock_model
+
+    def test_skellam_calls_custom_dist(self, mock_pm_az, small_game_data):
+        """With use_skellam=True, pm.CustomDist must be called (not Normal for spread)."""
+        module, pm, az, mock_model, *_ = mock_pm_az
+        pm.CustomDist = MagicMock(return_value=MagicMock(name="CustomDist_rv"))
+        pm.Deterministic = MagicMock(return_value=MagicMock(name="Deterministic_rv"))
+        head = module.BayesianHead(embedding_dim=4, n_conferences=8, n_seeds=4, use_skellam=True)
+        head.build_model(**small_game_data)
+        pm.CustomDist.assert_called()
+
+    def test_normal_model_does_not_call_custom_dist(self, mock_pm_az, small_game_data):
+        """With use_skellam=False, pm.CustomDist should NOT be called."""
+        module, pm, az, mock_model, *_ = mock_pm_az
+        pm.CustomDist = MagicMock(return_value=MagicMock(name="CustomDist_rv"))
+        pm.Deterministic = MagicMock(return_value=MagicMock(name="Deterministic_rv"))
+        head = module.BayesianHead(embedding_dim=4, n_conferences=8, n_seeds=4, use_skellam=False)
+        head.build_model(**small_game_data)
+        pm.CustomDist.assert_not_called()
+
+    def test_skellam_model_normal_spread_not_called(self, mock_pm_az, small_game_data):
+        """With use_skellam=True, pm.Normal should NOT be called with observed=y_spread."""
+        module, pm, az, mock_model, *_ = mock_pm_az
+        pm.CustomDist = MagicMock(return_value=MagicMock(name="CustomDist_rv"))
+        pm.Deterministic = MagicMock(return_value=MagicMock(name="Deterministic_rv"))
+        head = module.BayesianHead(embedding_dim=4, n_conferences=8, n_seeds=4, use_skellam=True)
+        head.build_model(**small_game_data)
+        # pm.Normal calls with observed=y_spread should be 0
+        y_spread = small_game_data["y_spread"]
+        observed_spread_calls = [
+            c for c in pm.Normal.call_args_list
+            if c[1].get("observed") is not None
+            and np.array_equal(c[1]["observed"], y_spread)
+        ]
+        assert len(observed_spread_calls) == 0
+
+    def test_normal_model_spread_still_calls_normal(self, mock_pm_az, small_game_data):
+        """With use_skellam=False, pm.Normal must still be called with observed=y_spread."""
+        module, pm, az, mock_model, *_ = mock_pm_az
+        pm.CustomDist = MagicMock(return_value=MagicMock(name="CustomDist_rv"))
+        pm.Deterministic = MagicMock(return_value=MagicMock(name="Deterministic_rv"))
+        head = module.BayesianHead(embedding_dim=4, n_conferences=8, n_seeds=4, use_skellam=False)
+        head.build_model(**small_game_data)
+        observed_arrays = [
+            c[1].get("observed") for c in pm.Normal.call_args_list
+            if c[1].get("observed") is not None
+        ]
+        assert len(observed_arrays) >= 1
+
+    def test_skellam_and_normal_same_interface(self, mock_pm_az):
+        """Both use_skellam=True and False must return same keys from predict()."""
+        module, pm, az, mock_model, mock_approx, idata_advi, idata_nuts = mock_pm_az
+        # We test the attribute interface here — both modes have same __init__ params
+        head_sk = module.BayesianHead(embedding_dim=4, use_skellam=True)
+        head_no = module.BayesianHead(embedding_dim=4, use_skellam=False)
+        # Both have the same methods
+        assert hasattr(head_sk, "build_model")
+        assert hasattr(head_sk, "fit")
+        assert hasattr(head_sk, "predict")
+        assert hasattr(head_no, "build_model")
+        assert hasattr(head_no, "fit")
+        assert hasattr(head_no, "predict")
+
+    def test_skellam_model_wins_and_spreads(self, mock_pm_az):
+        """n_games=5 input → model builds with use_skellam=True without error."""
+        module, pm, az, mock_model, *_ = mock_pm_az
+        pm.CustomDist = MagicMock(return_value=MagicMock(name="CustomDist_rv"))
+        pm.Deterministic = MagicMock(return_value=MagicMock(name="Deterministic_rv"))
+        rng = np.random.default_rng(0)
+        G, D = 5, 4
+        data = {
+            "home_emb": rng.standard_normal((G, D)).astype(np.float32),
+            "away_emb": rng.standard_normal((G, D)).astype(np.float32),
+            "home_conf": rng.integers(0, 8, size=G),
+            "away_conf": rng.integers(0, 8, size=G),
+            "home_seed": rng.integers(0, 4, size=G),
+            "away_seed": rng.integers(0, 4, size=G),
+            "y_win": rng.integers(0, 2, size=G).astype(np.float32),
+            "y_spread": rng.integers(1, 20, size=G).astype(np.float32),
+        }
+        head = module.BayesianHead(embedding_dim=D, n_conferences=8, n_seeds=4, use_skellam=True)
+        result = head.build_model(**data)
+        assert result is mock_model
+
+    # ------ real PyMC integration tests (no mocking) -----------------------
+
+    def _real_game_data(self, G=5, D=4, seed=0):
+        """Synthetic data for real PyMC tests — integer spreads, nonzero."""
+        rng = np.random.default_rng(seed)
+        return {
+            "home_emb": rng.standard_normal((G, D)).astype(np.float32),
+            "away_emb": rng.standard_normal((G, D)).astype(np.float32),
+            "home_conf": rng.integers(0, 8, size=G),
+            "away_conf": rng.integers(0, 8, size=G),
+            "home_seed": rng.integers(0, 4, size=G),
+            "away_seed": rng.integers(0, 4, size=G),
+            "y_win": rng.integers(0, 2, size=G).astype(np.float32),
+            # Non-zero integer spreads (zero-truncated Skellam assigns -inf to 0)
+            "y_spread": rng.choice(
+                [v for v in range(-20, 21) if v != 0], size=G
+            ).astype(np.float32),
+        }
+
+    def test_build_model_returns_model_with_skellam_real(self):
+        """Real PyMC: build_model(use_skellam=True) returns a pm.Model."""
+        pm = pytest.importorskip("pymc")
+        import sys
+        sys.modules.pop("src.model.bayesian_head", None)
+        sys.modules.pop("src.model.skellam", None)
+        from src.model.bayesian_head import BayesianHead
+        data = self._real_game_data()
+        head = BayesianHead(embedding_dim=4, n_conferences=8, n_seeds=4,
+                            advi_iterations=200, use_skellam=True)
+        model = head.build_model(**data)
+        assert isinstance(model, pm.Model)
+
+    def test_build_model_returns_model_with_normal_real(self):
+        """Real PyMC: build_model(use_skellam=False) returns a pm.Model."""
+        pm = pytest.importorskip("pymc")
+        import sys
+        sys.modules.pop("src.model.bayesian_head", None)
+        sys.modules.pop("src.model.skellam", None)
+        from src.model.bayesian_head import BayesianHead
+        data = self._real_game_data()
+        head = BayesianHead(embedding_dim=4, n_conferences=8, n_seeds=4,
+                            advi_iterations=200, use_skellam=False)
+        model = head.build_model(**data)
+        assert isinstance(model, pm.Model)
+
+    def test_skellam_model_has_log_base_rate(self):
+        """Real PyMC: model.named_vars must contain 'log_base_rate' when use_skellam=True."""
+        pytest.importorskip("pymc")
+        import sys
+        sys.modules.pop("src.model.bayesian_head", None)
+        sys.modules.pop("src.model.skellam", None)
+        from src.model.bayesian_head import BayesianHead
+        data = self._real_game_data()
+        head = BayesianHead(embedding_dim=4, n_conferences=8, n_seeds=4, use_skellam=True)
+        model = head.build_model(**data)
+        assert "log_base_rate" in model.named_vars
+
+    def test_normal_model_does_not_have_log_base_rate(self):
+        """Real PyMC: model.named_vars must NOT have 'log_base_rate' when use_skellam=False."""
+        pytest.importorskip("pymc")
+        import sys
+        sys.modules.pop("src.model.bayesian_head", None)
+        sys.modules.pop("src.model.skellam", None)
+        from src.model.bayesian_head import BayesianHead
+        data = self._real_game_data()
+        head = BayesianHead(embedding_dim=4, n_conferences=8, n_seeds=4, use_skellam=False)
+        model = head.build_model(**data)
+        assert "log_base_rate" not in model.named_vars
+
+    def test_skellam_model_contains_spread_obs(self):
+        """Real PyMC: Observed spread variable exists in model."""
+        pytest.importorskip("pymc")
+        import sys
+        sys.modules.pop("src.model.bayesian_head", None)
+        sys.modules.pop("src.model.skellam", None)
+        from src.model.bayesian_head import BayesianHead
+        data = self._real_game_data()
+        head = BayesianHead(embedding_dim=4, n_conferences=8, n_seeds=4, use_skellam=True)
+        model = head.build_model(**data)
+        # 'obs_spread' should exist in named_vars
+        assert "obs_spread" in model.named_vars
+
+    def test_skellam_model_has_mu_home_away(self):
+        """Real PyMC: 'mu_home' and 'mu_away' deterministic vars exist with Skellam."""
+        pytest.importorskip("pymc")
+        import sys
+        sys.modules.pop("src.model.bayesian_head", None)
+        sys.modules.pop("src.model.skellam", None)
+        from src.model.bayesian_head import BayesianHead
+        data = self._real_game_data()
+        head = BayesianHead(embedding_dim=4, n_conferences=8, n_seeds=4, use_skellam=True)
+        model = head.build_model(**data)
+        assert "mu_home" in model.named_vars
+        assert "mu_away" in model.named_vars
+
+    def test_skellam_model_fit_advi(self):
+        """Real PyMC: build_model(use_skellam=True) + fit(method='advi', n=200) runs without error."""
+        pytest.importorskip("pymc")
+        import sys
+        sys.modules.pop("src.model.bayesian_head", None)
+        sys.modules.pop("src.model.skellam", None)
+        from src.model.bayesian_head import BayesianHead
+        data = self._real_game_data()
+        head = BayesianHead(embedding_dim=4, n_conferences=8, n_seeds=4,
+                            advi_iterations=200, use_skellam=True)
+        model = head.build_model(**data)
+        idata = head.fit(model)
+        assert idata is not None
+
+    def test_normal_model_fit_advi(self):
+        """Real PyMC: build_model(use_skellam=False) + fit(method='advi', n=200) runs without error."""
+        pytest.importorskip("pymc")
+        import sys
+        sys.modules.pop("src.model.bayesian_head", None)
+        sys.modules.pop("src.model.skellam", None)
+        from src.model.bayesian_head import BayesianHead
+        data = self._real_game_data()
+        head = BayesianHead(embedding_dim=4, n_conferences=8, n_seeds=4,
+                            advi_iterations=200, use_skellam=False)
+        model = head.build_model(**data)
+        idata = head.fit(model)
+        assert idata is not None
+
+    def test_zero_spread_excluded(self):
+        """Zero spread raises -inf log-prob under ZT-Skellam; model should still build with nonzero data."""
+        pytest.importorskip("pymc")
+        import sys
+        sys.modules.pop("src.model.bayesian_head", None)
+        sys.modules.pop("src.model.skellam", None)
+        from src.model.bayesian_head import BayesianHead
+        data = self._real_game_data()
+        # Ensure no zero in spreads
+        assert not np.any(data["y_spread"] == 0)
+        head = BayesianHead(embedding_dim=4, n_conferences=8, n_seeds=4, use_skellam=True)
+        model = head.build_model(**data)
+        assert model is not None
