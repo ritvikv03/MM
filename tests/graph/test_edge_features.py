@@ -446,3 +446,174 @@ class TestToEdgeTensor:
         cols = ["ot_flag"]
         t = to_edge_tensor(df, cols)
         assert t.shape == (3, 1)
+
+
+# ===========================================================================
+# TestComputeTravelFatigue — travel_fatigue 3-dim edge feature vector
+# ===========================================================================
+
+import math as _math
+import pytest
+import pandas as pd
+import numpy as np
+
+from src.graph.edge_features import compute_travel_fatigue, _haversine_miles
+
+
+class TestHaversineMiles:
+    """Unit tests for the internal Haversine helper."""
+
+    def test_same_point_zero_distance(self):
+        assert _haversine_miles(0.0, 0.0, 0.0, 0.0) == pytest.approx(0.0)
+
+    def test_known_distance_nyc_la(self):
+        """NYC (40.7, -74.0) to LA (34.1, -118.2) ≈ 2,445 miles."""
+        dist = _haversine_miles(40.7, -74.0, 34.1, -118.2)
+        assert 2_400 < dist < 2_500
+
+    def test_returns_positive(self):
+        dist = _haversine_miles(38.9, -77.0, 41.9, -87.6)
+        assert dist > 0.0
+
+
+class TestComputeTravelFatigue:
+    """Tests for compute_travel_fatigue()."""
+
+    def _make_games_df(self, with_venue: bool = True) -> pd.DataFrame:
+        data = {"WTeamID": [1, 2], "LTeamID": [3, 4]}
+        if with_venue:
+            data["VenueID"] = [100, 101]
+        return pd.DataFrame(data)
+
+    def test_returns_dataframe(self):
+        df = self._make_games_df()
+        result = compute_travel_fatigue(df)
+        assert isinstance(result, pd.DataFrame)
+
+    def test_adds_distance_miles_column(self):
+        df = self._make_games_df()
+        result = compute_travel_fatigue(df)
+        assert "distance_miles" in result.columns
+
+    def test_adds_time_zones_crossed_column(self):
+        df = self._make_games_df()
+        result = compute_travel_fatigue(df)
+        assert "time_zones_crossed" in result.columns
+
+    def test_adds_elevation_flag_column(self):
+        df = self._make_games_df()
+        result = compute_travel_fatigue(df)
+        assert "elevation_flag" in result.columns
+
+    def test_defaults_to_zero_without_coords(self):
+        """When no coordinates are supplied, all three features should be 0."""
+        df = self._make_games_df()
+        result = compute_travel_fatigue(df)
+        assert (result["distance_miles"] == 0.0).all()
+        assert (result["time_zones_crossed"] == 0.0).all()
+        assert (result["elevation_flag"] == 0.0).all()
+
+    def test_distance_computed_with_coords(self):
+        """With campus + venue coords, distance should be non-zero."""
+        df = self._make_games_df(with_venue=True)
+        campus = {1: (33.7, -84.4)}   # Atlanta (team 1 home)
+        venue  = {100: (39.7, -104.9)}  # Denver
+        result = compute_travel_fatigue(df, campus_coords=campus, venue_coords=venue)
+        assert result.loc[0, "distance_miles"] > 0.0
+
+    def test_time_zones_crossed_computed(self):
+        """Atlanta (lon=-84) → Denver (lon=-105): ~1.4 hours ≈ 1 TZ crossed."""
+        df = self._make_games_df(with_venue=True)
+        campus = {1: (33.7, -84.4)}
+        venue  = {100: (39.7, -104.9)}
+        result = compute_travel_fatigue(df, campus_coords=campus, venue_coords=venue)
+        tz = result.loc[0, "time_zones_crossed"]
+        assert 1.0 <= tz <= 2.0
+
+    def test_elevation_flag_set_for_high_altitude_venue(self):
+        """Denver (5280 ft) should produce elevation_flag=1."""
+        df = self._make_games_df(with_venue=True)
+        campus = {1: (33.7, -84.4)}
+        venue  = {100: (39.7, -104.9)}
+        elevation = {100: 5280.0}
+        result = compute_travel_fatigue(
+            df, campus_coords=campus, venue_coords=venue,
+            venue_elevation=elevation,
+        )
+        assert result.loc[0, "elevation_flag"] == 1.0
+
+    def test_elevation_flag_zero_for_low_altitude_venue(self):
+        df = self._make_games_df(with_venue=True)
+        campus = {1: (33.7, -84.4)}
+        venue  = {100: (29.7, -95.4)}
+        elevation = {100: 50.0}
+        result = compute_travel_fatigue(
+            df, campus_coords=campus, venue_coords=venue,
+            venue_elevation=elevation,
+        )
+        assert result.loc[0, "elevation_flag"] == 0.0
+
+    def test_no_venue_id_column_graceful(self):
+        """When games_df has no VenueID column, all venue features are 0."""
+        df = self._make_games_df(with_venue=False)
+        campus = {1: (33.7, -84.4)}
+        venue  = {100: (39.7, -104.9)}
+        result = compute_travel_fatigue(df, campus_coords=campus, venue_coords=venue)
+        # No VenueID → distances and TZ are 0 (no campus-venue pairing possible).
+        assert (result["distance_miles"] == 0.0).all()
+
+    def test_time_zones_capped_at_3(self):
+        """UTC offset diff > 3 hours should be capped at 3.0."""
+        df = pd.DataFrame({"WTeamID": [1], "LTeamID": [2], "VenueID": [100]})
+        campus = {1: (25.8, -80.2)}    # Miami (lon=-80)
+        venue  = {100: (21.3, -157.8)}  # Honolulu (lon=-158): ~5.2 TZ → capped at 3
+        result = compute_travel_fatigue(df, campus_coords=campus, venue_coords=venue)
+        assert result.loc[0, "time_zones_crossed"] == pytest.approx(3.0)
+
+    def test_output_row_count_matches_input(self):
+        df = self._make_games_df(with_venue=True)
+        result = compute_travel_fatigue(df)
+        assert len(result) == len(df)
+
+
+class TestEdgeFeatureBuilderWithTravelFatigue:
+    """EdgeFeatureBuilder.build() now emits travel fatigue columns."""
+
+    def _make_games_df(self) -> pd.DataFrame:
+        return pd.DataFrame({
+            "Season": [2024, 2024],
+            "DayNum": [30, 35],
+            "WTeamID": [1, 2],
+            "WScore": [70, 80],
+            "LTeamID": [3, 4],
+            "LScore": [60, 65],
+            "WLoc": ["N", "H"],
+            "NumOT": [0, 1],
+        })
+
+    def test_build_includes_distance_miles(self):
+        from src.graph.edge_features import EdgeFeatureBuilder
+        builder = EdgeFeatureBuilder()
+        df = self._make_games_df()
+        result = builder.build(df)
+        assert "distance_miles" in result.columns
+
+    def test_build_includes_time_zones_crossed(self):
+        from src.graph.edge_features import EdgeFeatureBuilder
+        builder = EdgeFeatureBuilder()
+        result = builder.build(self._make_games_df())
+        assert "time_zones_crossed" in result.columns
+
+    def test_build_includes_elevation_flag(self):
+        from src.graph.edge_features import EdgeFeatureBuilder
+        builder = EdgeFeatureBuilder()
+        result = builder.build(self._make_games_df())
+        assert "elevation_flag" in result.columns
+
+    def test_build_defaults_to_zero_fatigue_without_coords(self):
+        from src.graph.edge_features import EdgeFeatureBuilder
+        builder = EdgeFeatureBuilder()
+        result = builder.build(self._make_games_df())
+        assert (result["distance_miles"] == 0.0).all()
+        assert (result["time_zones_crossed"] == 0.0).all()
+        assert (result["elevation_flag"] == 0.0).all()

@@ -784,3 +784,100 @@ class TestUncertaintyToKellyFraction:
             odds = float(rng.uniform(1.1, 5.0))
             result = self.module.uncertainty_to_kelly_fraction(p, std, odds)
             assert result >= 0.0
+
+
+# ===========================================================================
+# 8. TestCoachATSEffect — Coach ATS ("Tom Izzo Effect") hierarchical prior
+# ===========================================================================
+
+class TestCoachATSEffect:
+    """build_model() with coach indices creates the Coach ATS Effect priors."""
+
+    def test_n_coaches_stored_in_init(self, mock_pm_az):
+        module, *_ = mock_pm_az
+        h = module.BayesianHead(embedding_dim=4, n_coaches=200)
+        assert h.n_coaches == 200
+
+    def test_default_n_coaches_is_1(self, mock_pm_az):
+        module, *_ = mock_pm_az
+        h = module.BayesianHead(embedding_dim=4)
+        assert h.n_coaches == 1
+
+    def test_coach_ats_normal_called_with_n_coaches_shape(
+        self, mock_pm_az, small_game_data
+    ):
+        """pm.Normal('coach_ats_effect', shape=n_coaches) must be created when
+        coach arrays are supplied."""
+        module, pm, *_ = mock_pm_az
+        G = len(small_game_data["y_win"])
+        rng = np.random.default_rng(55)
+        coach_data = {
+            **small_game_data,
+            "home_coach": rng.integers(0, 5, size=G),
+            "away_coach": rng.integers(0, 5, size=G),
+        }
+        head = module.BayesianHead(embedding_dim=4, n_conferences=8, n_seeds=4, n_coaches=5)
+        head.build_model(**coach_data)
+        shapes = [c[1].get("shape") for c in pm.Normal.call_args_list]
+        assert 5 in shapes  # n_coaches
+
+    def test_mu_coach_normal_called(self, mock_pm_az, small_game_data):
+        """mu_coach ~ Normal(0, 0.5) must be created."""
+        module, pm, *_ = mock_pm_az
+        G = len(small_game_data["y_win"])
+        rng = np.random.default_rng(55)
+        coach_data = {
+            **small_game_data,
+            "home_coach": rng.integers(0, 3, size=G),
+            "away_coach": rng.integers(0, 3, size=G),
+        }
+        head = module.BayesianHead(embedding_dim=4, n_conferences=8, n_seeds=4, n_coaches=3)
+        head.build_model(**coach_data)
+        # mu_coach has no shape kwarg and sigma=0.5
+        sigma_05 = [
+            c for c in pm.Normal.call_args_list
+            if c[1].get("sigma") == pytest.approx(0.5) and c[1].get("shape") is None
+        ]
+        assert len(sigma_05) >= 1
+
+    def test_sigma_coach_halfnormal_called(self, mock_pm_az, small_game_data):
+        """sigma_coach ~ HalfNormal(0.3) must be created."""
+        module, pm, *_ = mock_pm_az
+        G = len(small_game_data["y_win"])
+        rng = np.random.default_rng(55)
+        coach_data = {
+            **small_game_data,
+            "home_coach": rng.integers(0, 3, size=G),
+            "away_coach": rng.integers(0, 3, size=G),
+        }
+        head = module.BayesianHead(embedding_dim=4, n_conferences=8, n_seeds=4, n_coaches=3)
+        head.build_model(**coach_data)
+        sigma_03 = [
+            c for c in pm.HalfNormal.call_args_list
+            if 0.3 in c[0] or c[1].get("sigma") == pytest.approx(0.3)
+        ]
+        assert len(sigma_03) >= 1
+
+    def test_coach_prior_not_called_without_coach_data(
+        self, head_advi, mock_pm_az, small_game_data
+    ):
+        """When home_coach/away_coach are absent, no shape=n_coaches Normal
+        should be created and HalfNormal(0.3) should not appear."""
+        module, pm, *_ = mock_pm_az
+        head_advi.build_model(**small_game_data)
+        sigma_03 = [
+            c for c in pm.HalfNormal.call_args_list
+            if 0.3 in c[0] or c[1].get("sigma") == pytest.approx(0.3)
+        ]
+        assert len(sigma_03) == 0
+
+    def test_existing_tests_unaffected_by_n_coaches_param(
+        self, mock_pm_az, small_game_data
+    ):
+        """BayesianHead constructed without n_coaches still works identically."""
+        module, pm, *_ = mock_pm_az
+        h = module.BayesianHead(embedding_dim=4, n_conferences=8, n_seeds=4)
+        result = h.build_model(**small_game_data)
+        # Model is returned without error.
+        from unittest.mock import MagicMock
+        assert result is not None

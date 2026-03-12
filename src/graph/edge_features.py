@@ -9,15 +9,20 @@ Each directed edge represents one game played:
 
 Edge feature columns produced
 ──────────────────────────────────────────────────────────────
-margin          : WScore - LScore  (always positive)
-total_points    : WScore + LScore
-court_home      : 1 if WLoc == "H" else 0
-court_away      : 1 if WLoc == "A" else 0  (upset-bonus signal)
-court_neutral   : 1 if WLoc == "N" else 0  (tournament baseline)
-w_rest_days     : days since winner's previous game in same season; -1 = first game
-l_rest_days     : days since loser's previous game in same season; -1 = first game
-rest_disparity  : w_rest_days - l_rest_days
-ot_flag         : 1 if NumOT > 0 else 0
+margin              : WScore - LScore  (always positive)
+total_points        : WScore + LScore
+court_home          : 1 if WLoc == "H" else 0
+court_away          : 1 if WLoc == "A" else 0  (upset-bonus signal)
+court_neutral       : 1 if WLoc == "N" else 0  (tournament baseline)
+w_rest_days         : days since winner's previous game; -1 = first game
+l_rest_days         : days since loser's previous game; -1 = first game
+rest_disparity      : w_rest_days - l_rest_days
+ot_flag             : 1 if NumOT > 0 else 0
+
+Travel fatigue (3-dim vector, 0.0 when coordinates unavailable):
+  distance_miles      : great-circle distance (home campus → venue), miles
+  time_zones_crossed  : |UTC_offset_delta|, discretized 0/1/2/3+
+  elevation_flag      : 1 if venue elevation > 5,000 ft, else 0
 
 PIT Integrity
 ─────────────
@@ -29,12 +34,15 @@ when multiple games share the same DayNum.
 
 from __future__ import annotations
 
+import math
+
 import pandas as pd
 import numpy as np
 
 __all__ = [
     "EdgeFeatureBuilder",
     "compute_rest_days",
+    "compute_travel_fatigue",
     "encode_court_location",
     "to_edge_tensor",
 ]
@@ -45,6 +53,136 @@ __all__ = [
 
 _VALID_WLOC = {"H", "A", "N"}
 _SENTINEL = -1  # first game of season has no prior game
+
+# Elevation threshold (feet) for tournament venues that impose a meaningful
+# altitude disadvantage — see CLAUDE.md §2 edge feature mandate.
+_HIGH_ALTITUDE_FT = 5_000.0
+
+# Earth radius for Haversine formula (miles).
+_EARTH_RADIUS_MILES = 3_958.8
+
+
+# ---------------------------------------------------------------------------
+# Travel fatigue helpers
+# ---------------------------------------------------------------------------
+
+
+def _haversine_miles(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in miles between two (lat, lon) points in degrees."""
+    lat1_r = math.radians(lat1)
+    lat2_r = math.radians(lat2)
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(lat1_r) * math.cos(lat2_r) * math.sin(dlon / 2) ** 2
+    )
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return _EARTH_RADIUS_MILES * c
+
+
+def _longitude_to_utc_offset(lon: float) -> float:
+    """Approximate UTC offset from longitude (every 15° = 1 hour)."""
+    return lon / 15.0
+
+
+# ---------------------------------------------------------------------------
+# compute_travel_fatigue
+# ---------------------------------------------------------------------------
+
+
+def compute_travel_fatigue(
+    games_df: pd.DataFrame,
+    campus_coords: dict[int, tuple[float, float]] | None = None,
+    venue_coords: dict[int, tuple[float, float]] | None = None,
+    venue_elevation: dict[int, float] | None = None,
+) -> pd.DataFrame:
+    """Compute travel fatigue features for each game edge.
+
+    For each game, computes a 3-dimensional travel fatigue vector for the
+    **winning team** (the direction of the graph edge):
+
+    - ``distance_miles``     : great-circle miles from the home campus of the
+                               team assigned WTeamID to the game venue.
+    - ``time_zones_crossed`` : absolute difference in approximate UTC offset
+                               between home campus and venue, discretized to
+                               the integer range 0–3 (capped at 3+).
+    - ``elevation_flag``     : 1 if venue elevation > 5,000 ft, else 0.
+
+    When coordinates/elevation are unavailable for a game, all three features
+    default to 0.0 (graceful degradation, no errors raised).
+
+    Parameters
+    ----------
+    games_df : pd.DataFrame
+        Must contain at minimum: WTeamID, LTeamID.  A ``VenueID`` column is
+        used to look up venue coordinates/elevation; if absent, falls back to
+        0.0 for all venue-dependent features.
+    campus_coords : dict[int, tuple[float, float]] | None
+        Mapping team_id → (latitude_deg, longitude_deg) for each school's
+        home campus.  When ``None``, ``distance_miles`` and
+        ``time_zones_crossed`` default to 0.0.
+    venue_coords : dict[int, tuple[float, float]] | None
+        Mapping venue_id → (latitude_deg, longitude_deg) for tournament venues.
+        Keyed by ``VenueID`` column in *games_df* when available.  When
+        ``None`` or the row has no ``VenueID``, venue-dependent features are 0.
+    venue_elevation : dict[int, float] | None
+        Mapping venue_id → elevation in feet.  Used to compute
+        ``elevation_flag``.  When ``None``, ``elevation_flag`` defaults to 0.
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of *games_df* with three new float columns appended:
+        ``distance_miles``, ``time_zones_crossed``, ``elevation_flag``.
+    """
+    df = games_df.copy()
+
+    distance_col: list[float] = []
+    tz_col: list[float] = []
+    elevation_col: list[float] = []
+
+    has_venue_col = "VenueID" in df.columns
+
+    for _, row in df.iterrows():
+        w_team = int(row["WTeamID"])
+        venue_id = int(row["VenueID"]) if has_venue_col else None
+
+        dist = 0.0
+        tz_cross = 0.0
+        elev_flag = 0.0
+
+        # --- Distance + time zones -----------------------------------------
+        if (
+            campus_coords is not None
+            and w_team in campus_coords
+            and venue_coords is not None
+            and venue_id is not None
+            and venue_id in venue_coords
+        ):
+            clat, clon = campus_coords[w_team]
+            vlat, vlon = venue_coords[venue_id]
+            dist = _haversine_miles(clat, clon, vlat, vlon)
+            campus_tz = _longitude_to_utc_offset(clon)
+            venue_tz = _longitude_to_utc_offset(vlon)
+            tz_cross = float(min(abs(campus_tz - venue_tz), 3.0))
+
+        # --- Elevation flag -------------------------------------------------
+        if (
+            venue_elevation is not None
+            and venue_id is not None
+            and venue_id in venue_elevation
+        ):
+            elev_flag = 1.0 if venue_elevation[venue_id] > _HIGH_ALTITUDE_FT else 0.0
+
+        distance_col.append(dist)
+        tz_col.append(tz_cross)
+        elevation_col.append(elev_flag)
+
+    df["distance_miles"] = distance_col
+    df["time_zones_crossed"] = tz_col
+    df["elevation_flag"] = elevation_col
+    return df
 
 
 # ---------------------------------------------------------------------------
@@ -221,10 +359,17 @@ class EdgeFeatureBuilder:
     Output columns added (original columns are preserved)
     ──────────────────────────────────────────────────────
     margin, total_points, court_home, court_away, court_neutral,
-    w_rest_days, l_rest_days, rest_disparity, ot_flag
+    w_rest_days, l_rest_days, rest_disparity, ot_flag,
+    distance_miles, time_zones_crossed, elevation_flag
     """
 
-    def build(self, games_df: pd.DataFrame) -> pd.DataFrame:
+    def build(
+        self,
+        games_df: pd.DataFrame,
+        campus_coords: dict | None = None,
+        venue_coords: dict | None = None,
+        venue_elevation: dict | None = None,
+    ) -> pd.DataFrame:
         """
         Build all edge features from a game results DataFrame.
 
@@ -232,13 +377,22 @@ class EdgeFeatureBuilder:
         ----------
         games_df : pd.DataFrame
             Raw game results with columns:
-            ['Season','DayNum','WTeamID','WScore','LTeamID','LScore','WLoc','NumOT']
+            ['Season','DayNum','WTeamID','WScore','LTeamID','LScore','WLoc','NumOT'].
+            An optional 'VenueID' column enables travel fatigue computation.
+        campus_coords : dict[int, tuple[float, float]] | None
+            Mapping team_id → (lat, lon) for campus coordinates.  Required
+            to compute ``distance_miles`` and ``time_zones_crossed``.
+            Defaults to 0.0 when absent.
+        venue_coords : dict[int, tuple[float, float]] | None
+            Mapping venue_id → (lat, lon) for game venues.
+        venue_elevation : dict[int, float] | None
+            Mapping venue_id → elevation in feet.  Used for ``elevation_flag``.
 
         Returns
         -------
         pd.DataFrame
             New DataFrame (same rows) with original columns plus all edge
-            feature columns.
+            feature columns including the 3-dim travel fatigue vector.
         """
         df = games_df.copy()
 
@@ -260,5 +414,13 @@ class EdgeFeatureBuilder:
 
         # --- Rest disparity -------------------------------------------------
         df["rest_disparity"] = df["w_rest_days"] - df["l_rest_days"]
+
+        # --- Travel fatigue (3-dim vector) -----------------------------------
+        df = compute_travel_fatigue(
+            df,
+            campus_coords=campus_coords,
+            venue_coords=venue_coords,
+            venue_elevation=venue_elevation,
+        )
 
         return df

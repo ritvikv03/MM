@@ -21,10 +21,21 @@ Berri & Schmidt "Stumbling on Wins").  A HalfNormal(sigma=0.15) prior on the
 luck scale enforces this regression:  any luck effect >2σ (>0.30) is
 strongly penalised, keeping luck adjustments bounded near zero.
 
+Coach ATS Effect ("Tom Izzo Effect")
+-------------------------------------
+Per-coach latent variable with partial pooling:
+  mu_coach        ~ Normal(0, 0.5)          # league-wide ATS mean
+  sigma_coach     ~ HalfNormal(0.3)         # cross-coach variation
+  coach_ats_effect[c] ~ Normal(mu_coach, sigma_coach)   # per-coach
+coach_ats_effect is added to delta before likelihoods, encoding the empirical
+observation that coaches like Tom Izzo (MSU) systematically over- or
+under-perform regular-season metrics in tournament formats.
+
 Hierarchical structure
 ----------------------
 - Conference random effects (per-conference intercept).
 - Seed strength prior (informative; higher seed index = weaker team).
+- Coach ATS effect (partial-pooled per head coach).
 - Linear projection weights for home and away embeddings.
 
 Sampler choice
@@ -41,10 +52,12 @@ the caller from pre-computed arrays produced by the upstream ST-GNN pipeline.
 Usage example
 -------------
 >>> from src.model.bayesian_head import BayesianHead
->>> head = BayesianHead(embedding_dim=128)
->>> model = head.build_model(home_emb, away_emb, ...)
+>>> head = BayesianHead(embedding_dim=128, n_coaches=400)
+>>> model = head.build_model(home_emb, away_emb, ...,
+...     home_coach=home_coach_ids, away_coach=away_coach_ids)
 >>> idata = head.fit(model)
->>> preds = head.predict(idata, home_emb_test, away_emb_test, ...)
+>>> preds = head.predict(idata, home_emb_test, away_emb_test, ...,
+...     home_coach=home_coach_test, away_coach=away_coach_test)
 """
 
 from __future__ import annotations
@@ -76,6 +89,9 @@ class BayesianHead:
     n_seeds:
         Number of distinct tournament seed values (1–16).  A zero index
         is reserved for teams not in the tournament.  Default 16.
+    n_coaches:
+        Number of distinct head coach indices.  Used for the partial-pooled
+        Coach ATS Effect ("Tom Izzo Effect") prior.  Default 1 (no pooling).
     sampler:
         ``"advi"`` (default) — fast variational inference;
         ``"nuts"`` — full MCMC with No-U-Turn Sampler.
@@ -96,6 +112,7 @@ class BayesianHead:
         embedding_dim: int,
         n_conferences: int = 32,
         n_seeds: int = 16,
+        n_coaches: int = 1,
         sampler: str = "advi",
         advi_iterations: int = 10_000,
         nuts_draws: int = 500,
@@ -106,6 +123,7 @@ class BayesianHead:
         self.embedding_dim = embedding_dim
         self.n_conferences = n_conferences
         self.n_seeds = n_seeds
+        self.n_coaches = n_coaches
         self.sampler = sampler
         self.advi_iterations = advi_iterations
         self.nuts_draws = nuts_draws
@@ -129,6 +147,8 @@ class BayesianHead:
         y_spread: np.ndarray,
         home_luck: np.ndarray | None = None,
         away_luck: np.ndarray | None = None,
+        home_coach: np.ndarray | None = None,
+        away_coach: np.ndarray | None = None,
     ) -> "pm.Model":
         """Construct and return the PyMC hierarchical model.
 
@@ -158,6 +178,14 @@ class BayesianHead:
             provided, a regression-to-mean prior (LLN) is applied.
         away_luck : (G,) float | None
             Barttorvik close-game win fraction for the away team.
+        home_coach : (G,) int | None
+            Integer coach index for the home team (0-indexed into n_coaches).
+            When provided alongside away_coach, the Coach ATS Effect
+            ("Tom Izzo Effect") hierarchical prior is activated.
+            coach_ats_effect[c] ~ Normal(mu_coach, sigma_coach) is added to
+            delta before the Bernoulli and Normal likelihoods.
+        away_coach : (G,) int | None
+            Integer coach index for the away team.
 
         Returns
         -------
@@ -195,7 +223,25 @@ class BayesianHead:
                 pm.Normal("obs_away_luck", mu=0.5, sigma=luck_scale,
                           observed=away_luck)
 
-            # ---- 5. Linear predictors (deterministic) ----------------------
+            # ---- 5. Coach ATS Effect ("Tom Izzo Effect") -- optional -------
+            # Partial-pooled per-coach latent ATS tendency.  When home_coach
+            # and away_coach arrays are supplied, this prior learns whether a
+            # given coach systematically out- or under-performs efficiency
+            # metrics in sudden-death tournament formats.
+            # References: Sports Reference CBB coaching records.
+            if home_coach is not None and away_coach is not None:
+                mu_coach = pm.Normal("mu_coach", mu=0.0, sigma=0.5)
+                sigma_coach = pm.HalfNormal("sigma_coach", sigma=0.3)
+                coach_ats_effect = pm.Normal(
+                    "coach_ats_effect",
+                    mu=mu_coach,
+                    sigma=sigma_coach,
+                    shape=self.n_coaches,
+                )
+            else:
+                coach_ats_effect = None
+
+            # ---- 6. Linear predictors (deterministic) ----------------------
             # Use pm.math.dot so this stays in the PyTensor computation graph
             # and remains mockable in tests (avoids raw numpy @ on RV objects).
             home_strength = (
@@ -210,11 +256,15 @@ class BayesianHead:
             )
             delta = home_strength - away_strength
 
-            # ---- 6. Win probability — Bernoulli likelihood -----------------
+            # Apply coach ATS offset when coach indices are provided.
+            if coach_ats_effect is not None:
+                delta = delta + coach_ats_effect[home_coach] - coach_ats_effect[away_coach]
+
+            # ---- 7. Win probability — Bernoulli likelihood -----------------
             p_win = pm.math.sigmoid(delta)
             obs_win = pm.Bernoulli("obs_win", p=p_win, observed=y_win)
 
-            # ---- 7. Spread — Normal likelihood -----------------------------
+            # ---- 8. Spread — Normal likelihood -----------------------------
             sigma_spread = pm.HalfNormal("sigma_spread", sigma=10.0)
             obs_spread = pm.Normal(
                 "obs_spread", mu=delta, sigma=sigma_spread, observed=y_spread
@@ -274,6 +324,8 @@ class BayesianHead:
         away_conf: np.ndarray,
         home_seed: np.ndarray,
         away_seed: np.ndarray,
+        home_coach: np.ndarray | None = None,
+        away_coach: np.ndarray | None = None,
     ) -> dict:
         """Generate posterior predictive summaries for a set of games.
 
@@ -335,6 +387,18 @@ class BayesianHead:
         )  # (G, S)
 
         delta_samples = home_str - away_str                # (G, S)
+
+        # Apply coach ATS effect when coach indices and posterior are available.
+        if home_coach is not None and away_coach is not None:
+            try:
+                coach_raw = posterior["coach_ats_effect"].values  # (chain, draw, n_coaches)
+                coach_s = _flatten(coach_raw)                     # (S, n_coaches)
+                coach_home = coach_s[:, home_coach].T              # (G, S)
+                coach_away = coach_s[:, away_coach].T              # (G, S)
+                delta_samples = delta_samples + coach_home - coach_away
+            except (KeyError, AttributeError, TypeError):
+                # Coach posterior not in idata — silently fall back to no adjustment.
+                pass
 
         # Sigmoid → win probability posterior samples
         p_win_samples = 1.0 / (1.0 + np.exp(-delta_samples))  # (G, S)
