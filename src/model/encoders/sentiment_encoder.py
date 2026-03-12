@@ -13,7 +13,7 @@ Algorithm
 ---------
 For each team, matching alerts are scored by:
   1. Keyword severity from SEVERITY_WEIGHTS.
-  2. Recency decay: w = exp(-hours_since_alert / recency_halflife).
+  2. Recency decay: w = exp(-hours_since_alert / recency_decay_tau).
      Alerts with no timestamp receive weight 1.0.
   3. Weighted aggregation into an 8-channel vector:
        vec[0] = pressure = sum(sev * w) / max(1, n)
@@ -116,18 +116,24 @@ class SentimentEncoder:
     latent_dim:
         Output dimensionality.  Default 8.  When latent_dim > 8, the extra
         channels are filled with zeros (sparse representation).
-    recency_halflife_hours:
-        Half-life for exponential recency decay in hours.  Default 24.0.
-        Weight formula: w = exp(-hours_since_alert / halflife).
+    recency_decay_tau_hours:
+        Exponential decay time constant (tau) in hours.  Default 24.0.
+        Weight formula: w = exp(-hours_since_alert / tau).
+        Weight at t=tau is exp(-1) ≈ 0.368.
+        Must be > 0.
     """
 
     def __init__(
         self,
         latent_dim: int = 8,
-        recency_halflife_hours: float = 24.0,
+        recency_decay_tau_hours: float = 24.0,
     ) -> None:
+        if recency_decay_tau_hours <= 0:
+            raise ValueError(
+                f"recency_decay_tau_hours must be > 0, got {recency_decay_tau_hours}."
+            )
         self.latent_dim = latent_dim
-        self.recency_halflife_hours = recency_halflife_hours
+        self.recency_decay_tau_hours = recency_decay_tau_hours
 
     # ------------------------------------------------------------------
     # encode_single_team
@@ -185,7 +191,7 @@ class SentimentEncoder:
             if ts_str is not None:
                 hours = _hours_since(ts_str, ref_dt)
                 if hours is not None:
-                    w = math.exp(-hours / self.recency_halflife_hours)
+                    w = math.exp(-hours / self.recency_decay_tau_hours)
                 else:
                     w = 1.0
             else:
@@ -263,7 +269,7 @@ def encode_team_matrix(
     teams: List[str],
     alerts: List[dict],
     latent_dim: int = LATENT_DIM,
-    recency_halflife_hours: float = 24.0,
+    recency_decay_tau_hours: float = 24.0,
     reference_time: Optional[str] = None,
 ) -> np.ndarray:
     """Encode a fixed list of teams into a matrix of shape (len(teams), latent_dim).
@@ -278,8 +284,9 @@ def encode_team_matrix(
         List of alert dicts.
     latent_dim:
         Output dimensionality per team.  Default 8.
-    recency_halflife_hours:
-        Recency halflife for exponential decay.
+    recency_decay_tau_hours:
+        Exponential decay time constant (tau) in hours.  Weight at t=tau is
+        exp(-1) ≈ 0.368.
     reference_time:
         ISO-8601 string used as "now".
 
@@ -289,7 +296,7 @@ def encode_team_matrix(
     """
     enc = SentimentEncoder(
         latent_dim=latent_dim,
-        recency_halflife_hours=recency_halflife_hours,
+        recency_decay_tau_hours=recency_decay_tau_hours,
     )
     matrix = np.zeros((len(teams), latent_dim), dtype=float)
     for i, team in enumerate(teams):

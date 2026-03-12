@@ -22,7 +22,7 @@ import pytest
 @pytest.fixture()
 def encoder():
     from src.model.encoders.sentiment_encoder import SentimentEncoder
-    return SentimentEncoder(latent_dim=8, recency_halflife_hours=24.0)
+    return SentimentEncoder(latent_dim=8, recency_decay_tau_hours=24.0)
 
 
 def _alert(team: str, keyword: str, hours_ago: float = 0.0) -> dict:
@@ -126,15 +126,25 @@ class TestSentimentEncoderConstruction:
         enc = SentimentEncoder(latent_dim=16)
         assert enc.latent_dim == 16
 
-    def test_default_halflife(self):
+    def test_default_tau(self):
         from src.model.encoders.sentiment_encoder import SentimentEncoder
         enc = SentimentEncoder()
-        assert enc.recency_halflife_hours == 24.0
+        assert enc.recency_decay_tau_hours == 24.0
 
-    def test_custom_halflife(self):
+    def test_custom_tau(self):
         from src.model.encoders.sentiment_encoder import SentimentEncoder
-        enc = SentimentEncoder(recency_halflife_hours=12.0)
-        assert enc.recency_halflife_hours == 12.0
+        enc = SentimentEncoder(recency_decay_tau_hours=12.0)
+        assert enc.recency_decay_tau_hours == 12.0
+
+    def test_zero_halflife_raises(self):
+        from src.model.encoders.sentiment_encoder import SentimentEncoder
+        with pytest.raises(ValueError, match="recency_decay_tau_hours"):
+            SentimentEncoder(recency_decay_tau_hours=0)
+
+    def test_negative_halflife_raises(self):
+        from src.model.encoders.sentiment_encoder import SentimentEncoder
+        with pytest.raises(ValueError, match="recency_decay_tau_hours"):
+            SentimentEncoder(recency_decay_tau_hours=-5.0)
 
 
 # ===========================================================================
@@ -246,24 +256,23 @@ class TestRecencyDecay:
             "Recent alert should produce higher pressure than old alert"
         )
 
-    def test_recency_decay_uses_halflife(self):
-        """At t=halflife hours, weight should be ~0.5."""
+    def test_recency_decay_uses_tau(self):
+        """At t=tau hours, weight should be exp(-1) ≈ 0.368 (tau, e-folding time)."""
         from src.model.encoders.sentiment_encoder import SentimentEncoder
-        enc = SentimentEncoder(latent_dim=8, recency_halflife_hours=24.0)
-        vec_hl = enc.encode_single_team("Duke", [_alert("Duke", "sprain", hours_ago=24)])
-        vec_0  = enc.encode_single_team("Duke", [_alert("Duke", "sprain", hours_ago=0)])
-        # At halflife the weight = exp(-1) ≈ 0.368 of the fresh weight
-        # ratio should be roughly exp(-1) ≈ 0.368
-        ratio = vec_hl[0] / vec_0[0]
+        enc = SentimentEncoder(latent_dim=8, recency_decay_tau_hours=24.0)
+        vec_tau = enc.encode_single_team("Duke", [_alert("Duke", "sprain", hours_ago=24)])
+        vec_0   = enc.encode_single_team("Duke", [_alert("Duke", "sprain", hours_ago=0)])
+        # At tau (e-folding time) the weight = exp(-1) ≈ 0.368 of the fresh weight
+        ratio = vec_tau[0] / vec_0[0]
         expected = math.exp(-1.0)
         assert abs(ratio - expected) < 0.05, (
-            f"Recency ratio at halflife should be ~{expected:.3f}, got {ratio:.3f}"
+            f"Recency ratio at tau should be ~{expected:.3f}, got {ratio:.3f}"
         )
 
     def test_no_timestamp_uses_weight_one(self):
         """Alerts without timestamps should use recency weight = 1.0."""
         from src.model.encoders.sentiment_encoder import SentimentEncoder
-        enc = SentimentEncoder()
+        enc = SentimentEncoder()  # uses default recency_decay_tau_hours=24.0
         alert_no_ts = {
             "team": "Duke", "keyword": "sprain",
             "text": "Duke sprain", "source": "reddit", "url": "",
