@@ -14,7 +14,7 @@ import { fetchGraph } from '@/lib/api';
 import { getMockGraph } from '@/lib/mock-data';
 
 function StubDataBanner({ dataSource }: { dataSource: 'real' | 'stub' | 'unknown' }) {
-  if (dataSource === 'real') return null;
+  if (dataSource !== 'stub') return null;
   return (
     <div style={{
       position: 'fixed',
@@ -64,6 +64,7 @@ export default function HomePage() {
   // Reload graph when season changes
   useEffect(() => {
     setGraphLoading(true);
+    setDataSource('unknown');
     fetchGraph(season)
       .then((data) => {
         setGraphData(data);

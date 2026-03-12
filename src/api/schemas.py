@@ -4,7 +4,7 @@ Pydantic request/response models for the FastAPI server.
 These exactly mirror the Zod schemas in frontend/lib/api-types.ts.
 """
 from __future__ import annotations
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
@@ -52,7 +52,7 @@ class GraphResponse(BaseModel):
     conferences:      List[ConferenceNodeResponse]
     games:            List[GameEdgeResponse]
     conference_edges: List[ConferenceEdgeResponse]
-    data_source:      str = "stub"
+    data_source:      Literal["real", "stub"] = "stub"
 
 
 # ── Matchup ───────────────────────────────────────────────────────────────────
@@ -72,7 +72,7 @@ class MatchupResponse(BaseModel):
     spread_mean:    float
     spread_samples: List[float]
     luck_compressed: bool
-    data_source:    str = "stub"
+    data_source:    Literal["real", "stub"] = "stub"
 
 
 # ── Bracket simulate ──────────────────────────────────────────────────────────
@@ -91,4 +91,4 @@ class TeamAdvancementItem(BaseModel):
 class SimulateResponse(BaseModel):
     n_simulations: int
     advancements:  List[TeamAdvancementItem]
-    data_source:   str = "stub"
+    data_source:   Literal["real", "stub"] = "stub"
