@@ -13,6 +13,7 @@ from src.model.skellam import (
     skellam_pmf_zero_truncated,
     skellam_log_likelihood,
     margin_to_poisson_rates,
+    zero_truncated_skellam_log_pmf,
 )
 
 
@@ -117,3 +118,45 @@ class TestMarginToRates:
         mu1, mu2 = margin_to_poisson_rates(300.0)  # Extreme
         assert 1.0 <= mu1 <= 150.0
         assert 1.0 <= mu2 <= 150.0
+
+
+class TestZTSkellamLogPMF:
+    """Direct unit tests for zero_truncated_skellam_log_pmf (the PyMC-facing entry point)."""
+
+    def test_zero_k_returns_neg_inf(self):
+        """Zero-truncated: log-PMF for k=0 must be -inf."""
+        result = zero_truncated_skellam_log_pmf(np.array([0]), 75.0, 70.0)
+        assert np.isneginf(float(result))
+
+    def test_nonzero_k_returns_finite(self):
+        """Non-zero k must return a finite log-probability."""
+        result = zero_truncated_skellam_log_pmf(np.array([5]), 75.0, 70.0)
+        assert np.isfinite(float(result))
+
+    def test_consistent_with_linear_pmf(self):
+        """log(p) from ZT-log-PMF must match log(skellam_pmf_zero_truncated(k)) for nonzero k."""
+        from src.model.skellam import skellam_pmf_zero_truncated, zero_truncated_skellam_log_pmf
+        for k in [1, 3, 7, 10, -4]:
+            log_p = float(zero_truncated_skellam_log_pmf(np.array([k]), 75.0, 70.0))
+            linear_p = float(skellam_pmf_zero_truncated(k, 75.0, 70.0))
+            assert abs(log_p - np.log(linear_p)) < 1e-6, f"Mismatch at k={k}"
+
+    def test_array_input_shape_preserved(self):
+        """Array of k values returns array of same length."""
+        k_arr = np.array([1, 2, 3, 5, -1, -3])
+        result = zero_truncated_skellam_log_pmf(k_arr, 75.0, 70.0)
+        assert result.shape == k_arr.shape
+
+    def test_all_nonzero_results_negative(self):
+        """Log-probabilities for nonzero k must all be <= 0."""
+        k_arr = np.array([1, 2, 5, 10, -1, -5])
+        result = zero_truncated_skellam_log_pmf(k_arr, 75.0, 70.0)
+        assert np.all(result <= 0), f"Some log-probs > 0: {result}"
+
+    def test_scalar_and_array_agree(self):
+        """Scalar call and single-element array call must return same value."""
+        k_scalar = 5
+        k_arr = np.array([5])
+        r1 = float(zero_truncated_skellam_log_pmf(np.array([k_scalar]), 75.0, 70.0))
+        r2 = float(zero_truncated_skellam_log_pmf(k_arr, 75.0, 70.0))
+        assert abs(r1 - r2) < 1e-9
