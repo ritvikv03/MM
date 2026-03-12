@@ -24,5 +24,17 @@ data/raw/
 # W&B
 wandb/
 
+# Test / coverage artifacts
+.coverage
+htmlcov/
+coverage.xml
+
+# TypeScript build cache
+tsconfig.tsbuildinfo
+frontend/tsconfig.tsbuildinfo
+
+# Claude Code local config
+.claude/
+
 # OS
 .DS_Store
