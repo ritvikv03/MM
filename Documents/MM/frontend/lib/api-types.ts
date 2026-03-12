@@ -42,7 +42,7 @@ export const GraphResponseSchema = z.object({
   conferences: z.array(ConferenceNodeSchema),
   games: z.array(GameEdgeSchema),
   conference_edges: z.array(ConferenceEdgeSchema),
-  data_source: z.string().default("stub"),
+  data_source: z.enum(["real", "stub"]).default("stub"),
 });
 
 export const MatchupRequestSchema = z.object({
@@ -60,7 +60,7 @@ export const MatchupResponseSchema = z.object({
   spread_mean: z.number(),
   spread_samples: z.array(z.number()),
   luck_compressed: z.boolean(),
-  data_source: z.string().default("stub"),
+  data_source: z.enum(["real", "stub"]).default("stub"),
 });
 
 export const SimulateResponseSchema = z.object({
@@ -72,7 +72,7 @@ export const SimulateResponseSchema = z.object({
       entropy: z.number(),
     }),
   ),
-  data_source: z.string().default("stub"),
+  data_source: z.enum(["real", "stub"]).default("stub"),
 });
 
 // Enriched matchup response with factors, odds, and upset probability

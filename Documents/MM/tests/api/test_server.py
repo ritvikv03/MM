@@ -204,3 +204,22 @@ class TestSimulateEndpoint:
         a = self._post().json()
         b = self._post().json()
         assert a["advancements"][0]["entropy"] == b["advancements"][0]["entropy"]
+
+
+class TestDataSourceField:
+    def test_graph_response_includes_data_source_stub(self):
+        resp = client.get("/api/graph?season=2024")
+        assert resp.json()["data_source"] == "stub"
+
+    def test_matchup_response_includes_data_source_stub(self):
+        resp = client.post("/api/matchup", json={
+            "home_team": "Duke", "away_team": "Kansas",
+            "season": 2024, "neutral_site": True
+        })
+        assert resp.json()["data_source"] == "stub"
+
+    def test_simulate_response_includes_data_source_stub(self):
+        resp = client.post("/api/bracket/simulate", json={
+            "teams": ["Duke", "Kansas"], "n_simulations": 100
+        })
+        assert resp.json()["data_source"] == "stub"
