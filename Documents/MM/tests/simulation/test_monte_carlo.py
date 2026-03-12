@@ -482,3 +482,175 @@ class TestBracketSimulator:
     def test_default_random_seed(self):
         sim = BracketSimulator()
         assert sim.random_seed == 42
+
+
+# ===========================================================================
+# TestChaosEngine — _apply_chaos_engine topology disruption rule
+# ===========================================================================
+
+from src.simulation.monte_carlo import _apply_chaos_engine
+
+
+def _make_base_state(region: int = 0, survivors: list | None = None) -> dict:
+    if survivors is None:
+        survivors = ["Cinderella", "TeamB", "TeamC", "TeamD"]
+    return {
+        "surviving_teams": {region: list(survivors)},
+        "win_prob_adjustments": {},
+        "titan_killer": "Cinderella",
+        "ot_teams": set(),
+    }
+
+
+class TestChaosEngine:
+    """Tests for _apply_chaos_engine."""
+
+    def test_returns_dict(self):
+        state = _make_base_state()
+        rng = _make_rng()
+        result = _apply_chaos_engine(state, "Kansas", 0, {}, rng)
+        assert isinstance(result, dict)
+
+    def test_result_has_win_prob_adjustments_key(self):
+        state = _make_base_state()
+        rng = _make_rng()
+        result = _apply_chaos_engine(state, "Kansas", 0, {}, rng)
+        assert "win_prob_adjustments" in result
+
+    def test_titan_killer_receives_fatigue_penalty(self):
+        state = _make_base_state()
+        rng = _make_rng()
+        result = _apply_chaos_engine(
+            state, "Kansas", 0, {}, rng, chaos_fatigue_penalty=-0.02
+        )
+        adj = result["win_prob_adjustments"]
+        # Cinderella is the titan killer — must have a negative adjustment.
+        assert "Cinderella" in adj
+        assert adj["Cinderella"] < 0.0
+
+    def test_titan_killer_penalty_matches_parameter(self):
+        state = _make_base_state()
+        rng = _make_rng()
+        penalty = -0.05
+        result = _apply_chaos_engine(
+            state, "Kansas", 0, {}, rng, chaos_fatigue_penalty=penalty
+        )
+        adj = result["win_prob_adjustments"]
+        assert adj["Cinderella"] == pytest.approx(penalty)
+
+    def test_non_killer_survivors_get_path_relief(self):
+        """Non-killer survivors should receive a positive path-relief boost."""
+        survivors = ["Cinderella", "TeamB", "TeamC"]
+        state = _make_base_state(survivors=survivors)
+        rng = _make_rng()
+        result = _apply_chaos_engine(state, "Kansas", 0, {}, rng)
+        adj = result["win_prob_adjustments"]
+        # TeamB and TeamC are not the killer — should get positive adjustment.
+        assert adj.get("TeamB", 0.0) > 0.0
+        assert adj.get("TeamC", 0.0) > 0.0
+
+    def test_ot_penalty_applied_to_titan_killer_in_ot(self):
+        state = {
+            "surviving_teams": {0: ["Cinderella", "TeamB"]},
+            "win_prob_adjustments": {},
+            "titan_killer": "Cinderella",
+            "ot_teams": {"Cinderella"},
+        }
+        rng = _make_rng()
+        result = _apply_chaos_engine(
+            state, "Kansas", 0, {}, rng,
+            chaos_fatigue_penalty=-0.02, chaos_ot_penalty=-0.015,
+        )
+        adj = result["win_prob_adjustments"]
+        # Killer gets base fatigue + OT penalty.
+        assert adj["Cinderella"] == pytest.approx(-0.02 + -0.015)
+
+    def test_ot_penalty_applied_to_non_killer_ot_teams(self):
+        state = {
+            "surviving_teams": {0: ["Cinderella", "TeamB", "TeamC"]},
+            "win_prob_adjustments": {},
+            "titan_killer": "Cinderella",
+            "ot_teams": {"TeamB"},
+        }
+        rng = _make_rng()
+        result = _apply_chaos_engine(
+            state, "Kansas", 0, {}, rng,
+            chaos_fatigue_penalty=-0.02, chaos_ot_penalty=-0.015,
+        )
+        adj = result["win_prob_adjustments"]
+        # TeamB played OT but is not the killer → path_relief + ot_penalty.
+        assert "TeamB" in adj
+        assert adj["TeamB"] < 0.015  # OT penalty dominates
+
+    def test_no_adjustment_for_wrong_region(self):
+        """Teams in a different region should not receive any adjustment."""
+        state = {
+            "surviving_teams": {0: ["Cinderella"], 1: ["OtherTeam"]},
+            "win_prob_adjustments": {},
+            "titan_killer": "Cinderella",
+            "ot_teams": set(),
+        }
+        rng = _make_rng()
+        # Chaos in region 0 — OtherTeam in region 1 should be untouched.
+        result = _apply_chaos_engine(state, "Kansas", 0, {}, rng)
+        adj = result["win_prob_adjustments"]
+        assert "OtherTeam" not in adj
+
+    def test_preserves_surviving_teams_key(self):
+        state = _make_base_state()
+        rng = _make_rng()
+        result = _apply_chaos_engine(state, "Kansas", 0, {}, rng)
+        assert "surviving_teams" in result
+
+    def test_empty_survivors_no_crash(self):
+        state = {
+            "surviving_teams": {0: []},
+            "win_prob_adjustments": {},
+            "titan_killer": None,
+            "ot_teams": set(),
+        }
+        rng = _make_rng()
+        # Should not raise.
+        result = _apply_chaos_engine(state, "Kansas", 0, {}, rng)
+        assert isinstance(result, dict)
+
+    def test_chaos_does_not_mutate_input_state(self):
+        state = _make_base_state()
+        original_adj = dict(state["win_prob_adjustments"])
+        rng = _make_rng()
+        _apply_chaos_engine(state, "Kansas", 0, {}, rng)
+        # Input state's adjustments should not have been mutated.
+        assert state["win_prob_adjustments"] == original_adj
+
+
+class TestSimulateFullBracketWithChaos:
+    """simulate_full_bracket with seeds= activates the Chaos Engine."""
+
+    def test_chaos_mode_returns_wins_dict(self):
+        rng = _make_rng(1)
+        seeds = _make_64_teams()
+        bracket = build_bracket_structure(seeds)
+        wins = simulate_full_bracket(bracket, default_win_prob_fn, rng, seeds=seeds)
+        assert isinstance(wins, dict)
+
+    def test_chaos_mode_total_wins_63(self):
+        rng = _make_rng(2)
+        seeds = _make_64_teams()
+        bracket = build_bracket_structure(seeds)
+        wins = simulate_full_bracket(bracket, default_win_prob_fn, rng, seeds=seeds)
+        assert sum(wins.values()) == 63
+
+    def test_chaos_mode_all_teams_present(self):
+        rng = _make_rng(3)
+        seeds = _make_64_teams()
+        bracket = build_bracket_structure(seeds)
+        wins = simulate_full_bracket(bracket, default_win_prob_fn, rng, seeds=seeds)
+        assert len(wins) == 64
+
+    def test_no_seeds_still_works(self):
+        """Without seeds=, Chaos Engine is skipped and simulation runs normally."""
+        rng = _make_rng(4)
+        seeds = _make_64_teams()
+        bracket = build_bracket_structure(seeds)
+        wins = simulate_full_bracket(bracket, default_win_prob_fn, rng)
+        assert sum(wins.values()) == 63

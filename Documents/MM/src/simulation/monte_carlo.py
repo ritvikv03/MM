@@ -142,6 +142,102 @@ def build_bracket_structure(seeds: dict[str, int]) -> list[list[str]]:
     return structured_bracket
 
 
+def _apply_chaos_engine(
+    bracket_state: dict,
+    eliminated_team: str,
+    region: int,
+    posteriors: dict,
+    rng: np.random.Generator,
+    chaos_fatigue_penalty: float = -0.02,
+    chaos_ot_penalty: float = -0.015,
+) -> dict:
+    """Apply Topology Disruption Rule when a 1- or 2-seed is upset.
+
+    Triggered when a major-seed (1 or 2) is eliminated in Rounds 1 or 2.
+    Updates ``bracket_state["win_prob_adjustments"]`` for all surviving teams
+    in the affected region:
+
+    1. **Path difficulty reweight**: The expected remaining-path difficulty
+       drops without the titan.  Teams in the same region receive a small
+       positive boost (+0.01 per team, reflecting reduced expected opponent
+       strength) unless they are the team that beat the titan.
+    2. **Fatigue/momentum penalty**: The team that directly defeated the titan
+       (and any team that played overtime in this round) receives a cumulative
+       negative adjustment of ``chaos_fatigue_penalty`` per max-exertion game,
+       plus ``chaos_ot_penalty`` for each overtime game.
+
+    Parameters
+    ----------
+    bracket_state : dict
+        Must contain:
+        - ``"surviving_teams"`` : dict[int, list[str]]
+            Region index → list of surviving teams (post-round).
+        - ``"win_prob_adjustments"`` : dict[str, float]
+            Running per-team additive adjustment to mean win probability.
+        - ``"titan_killer"`` : str | None
+            The team that beat the eliminated titan in this round.
+        - ``"ot_teams"`` : set[str]
+            Teams that played overtime in the current round.
+    eliminated_team : str
+        The 1- or 2-seed that was upset.
+    region : int
+        Index (0–3) of the bracket region where the upset occurred.
+    posteriors : dict
+        Mapping team_name → (mean_win_prob, std_win_prob) from the Bayesian
+        head.  Used to re-sample matchup probabilities post-disruption.
+    rng : np.random.Generator
+        NumPy random Generator for reproducible resampling.
+    chaos_fatigue_penalty : float
+        Additive penalty applied to the titan-killer for each game played at
+        maximum exertion.  Default ``-0.02``.
+    chaos_ot_penalty : float
+        Additional additive penalty for overtime games.  Default ``-0.015``.
+
+    Returns
+    -------
+    dict
+        Updated ``bracket_state`` with refreshed ``win_prob_adjustments``.
+    """
+    state = {
+        "surviving_teams": dict(bracket_state.get("surviving_teams", {})),
+        "win_prob_adjustments": dict(bracket_state.get("win_prob_adjustments", {})),
+        "titan_killer": bracket_state.get("titan_killer"),
+        "ot_teams": set(bracket_state.get("ot_teams", set())),
+    }
+
+    region_survivors = state["surviving_teams"].get(region, [])
+    adjustments = state["win_prob_adjustments"]
+    titan_killer = state["titan_killer"]
+    ot_teams = state["ot_teams"]
+
+    # --- Step 1: Path-difficulty boost for all survivors in the region ------
+    # Without the titan, the expected path is easier for every surviving team.
+    _PATH_RELIEF = 0.01  # small positive shift per survivor
+    for team in region_survivors:
+        if team != titan_killer:
+            adjustments[team] = adjustments.get(team, 0.0) + _PATH_RELIEF
+
+    # --- Step 2: Fatigue penalty for the titan-killer -----------------------
+    if titan_killer is not None and titan_killer in region_survivors:
+        # Penalise for playing at max exertion to beat the titan.
+        adjustments[titan_killer] = (
+            adjustments.get(titan_killer, 0.0) + chaos_fatigue_penalty
+        )
+        # Additional OT penalty.
+        if titan_killer in ot_teams:
+            adjustments[titan_killer] = (
+                adjustments.get(titan_killer, 0.0) + chaos_ot_penalty
+            )
+
+    # All surviving teams that played OT (besides the titan-killer already handled)
+    for team in ot_teams:
+        if team != titan_killer and team in region_survivors:
+            adjustments[team] = adjustments.get(team, 0.0) + chaos_ot_penalty
+
+    state["win_prob_adjustments"] = adjustments
+    return state
+
+
 def simulate_game(
     team_a: str,
     team_b: str,
@@ -222,6 +318,10 @@ def simulate_full_bracket(
     bracket_structure: list[list[str]],
     win_prob_fn: WinProbFn,
     rng: np.random.Generator,
+    seeds: dict[str, int] | None = None,
+    posteriors: dict | None = None,
+    chaos_fatigue_penalty: float = -0.02,
+    chaos_ot_penalty: float = -0.015,
 ) -> dict[str, int]:
     """Simulate a complete 64-team NCAA bracket, returning per-team win counts.
 
@@ -232,6 +332,14 @@ def simulate_full_bracket(
       region 2 champion vs region 3 champion
     - Championship game between the two Final Four winners
 
+    Chaos Engine
+    ------------
+    When ``seeds`` is provided, the Topology Disruption Rule fires whenever a
+    1- or 2-seed is eliminated in Rounds 1 or 2.  ``_apply_chaos_engine`` is
+    called immediately after the round resolves, adjusting win-probability for
+    all surviving teams in the affected region.  The adjusted probabilities are
+    incorporated by wrapping ``win_prob_fn`` with the running adjustments.
+
     Parameters
     ----------
     bracket_structure:
@@ -241,6 +349,16 @@ def simulate_full_bracket(
         Callable (team_a, team_b) → (mean_prob, std_prob).
     rng:
         NumPy random Generator.
+    seeds : dict[str, int] | None
+        Mapping team_name → seed (1–16).  Required to detect 1/2-seed upsets
+        and activate the Chaos Engine.  When ``None``, chaos logic is skipped.
+    posteriors : dict | None
+        Mapping team_name → (mean_win_prob, std_win_prob) for post-chaos
+        probability resampling.  Passed through to ``_apply_chaos_engine``.
+    chaos_fatigue_penalty : float
+        Per-game fatigue penalty applied to the titan-killer.  Default -0.02.
+    chaos_ot_penalty : float
+        Additional OT fatigue penalty.  Default -0.015.
 
     Returns
     -------
@@ -255,36 +373,93 @@ def simulate_full_bracket(
         for team in region:
             wins[team] = 0
 
+    # Build initial bracket_state for the Chaos Engine.
+    # win_prob_adjustments accumulates additive offsets to mean win probs.
+    chaos_state: dict = {
+        "surviving_teams": {
+            i: list(bracket_structure[i]) for i in range(len(bracket_structure))
+        },
+        "win_prob_adjustments": {},
+        "titan_killer": None,
+        "ot_teams": set(),
+    }
+
+    def _adjusted_win_prob_fn(team_a: str, team_b: str) -> tuple[float, float]:
+        """Wrap win_prob_fn, applying any running chaos adjustments."""
+        mean_a, std_a = win_prob_fn(team_a, team_b)
+        adj_a = chaos_state["win_prob_adjustments"].get(team_a, 0.0)
+        adj_b = chaos_state["win_prob_adjustments"].get(team_b, 0.0)
+        # Apply the net adjustment: if team_a has a fatigue penalty, lower its mean.
+        adjusted_mean = float(np.clip(mean_a + adj_a - adj_b, 0.01, 0.99))
+        return adjusted_mean, std_a
+
+    use_chaos = seeds is not None
+    _titan_seeds = {1, 2}  # seeds that trigger chaos when eliminated in R1/R2
+
     # --- Rounds 1-4: simulate each of the 4 regional brackets ---
     regional_champions: list[str] = []
-    for region_teams in bracket_structure:
+    for region_idx, region_teams in enumerate(bracket_structure):
         current_round = list(region_teams)
+        round_num = 1
+
         while len(current_round) > 1:
             next_round: list[str] = []
+            ot_teams_this_round: set[str] = set()
+
             for i in range(0, len(current_round), 2):
-                winner = simulate_game(
-                    current_round[i], current_round[i + 1], win_prob_fn, rng
-                )
+                team_a = current_round[i]
+                team_b = current_round[i + 1]
+                prob_fn = _adjusted_win_prob_fn if use_chaos else win_prob_fn
+                winner = simulate_game(team_a, team_b, prob_fn, rng)
+                loser = team_b if winner == team_a else team_a
                 wins[winner] += 1
                 next_round.append(winner)
+
+                # Chaos Engine: detect 1/2-seed upset in R1 or R2.
+                if use_chaos and round_num <= 2 and seeds is not None:
+                    loser_seed = seeds.get(loser, 99)
+                    if loser_seed in _titan_seeds:
+                        chaos_state["titan_killer"] = winner
+                        chaos_state["ot_teams"] = ot_teams_this_round
+                        chaos_state["surviving_teams"][region_idx] = [
+                            t for t in current_round if t != loser
+                        ]
+                        chaos_state = _apply_chaos_engine(
+                            bracket_state=chaos_state,
+                            eliminated_team=loser,
+                            region=region_idx,
+                            posteriors=posteriors or {},
+                            rng=rng,
+                            chaos_fatigue_penalty=chaos_fatigue_penalty,
+                            chaos_ot_penalty=chaos_ot_penalty,
+                        )
+
             current_round = next_round
+            # Update surviving teams post-round.
+            if use_chaos:
+                chaos_state["surviving_teams"][region_idx] = list(current_round)
+                chaos_state["titan_killer"] = None
+                chaos_state["ot_teams"] = set()
+            round_num += 1
+
         regional_champions.append(current_round[0])
 
     # --- Round 5: Final Four semi-finals ---
     # Region 0 vs Region 1
+    prob_fn = _adjusted_win_prob_fn if use_chaos else win_prob_fn
     ff_winner_01 = simulate_game(
-        regional_champions[0], regional_champions[1], win_prob_fn, rng
+        regional_champions[0], regional_champions[1], prob_fn, rng
     )
     wins[ff_winner_01] += 1
 
     # Region 2 vs Region 3
     ff_winner_23 = simulate_game(
-        regional_champions[2], regional_champions[3], win_prob_fn, rng
+        regional_champions[2], regional_champions[3], prob_fn, rng
     )
     wins[ff_winner_23] += 1
 
     # --- Round 6: Championship ---
-    champion = simulate_game(ff_winner_01, ff_winner_23, win_prob_fn, rng)
+    champion = simulate_game(ff_winner_01, ff_winner_23, prob_fn, rng)
     wins[champion] += 1
 
     return wins
