@@ -37,6 +37,8 @@ EXPECTED_OUTPUT_COLS = [
     "team_id", "season", "adj_em", "adj_o", "adj_d", "adj_t", "luck",
     "team_bpr_weighted", "rim_pct", "three_pct", "transition_pct", "efg",
     "availability", "roster_continuity", "effective_strength",
+    # Shannon Entropy gate features (always present; defaults applied when entropy_df omitted)
+    "scoring_entropy_normalized", "kill_shot_vulnerability", "kill_shot_p_run_given_trading",
 ]
 
 

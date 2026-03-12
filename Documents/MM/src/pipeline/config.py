@@ -32,6 +32,11 @@ class PipelineConfig:
     node_in_features: int = 12
     edge_in_features: int = 5
 
+    # Shannon Entropy gating
+    entropy_feat_dim: int = 3        # scoring_entropy_normalized, kill_shot_vulnerability,
+                                     # kill_shot_p_run_given_trading
+    use_entropy_gating: bool = True  # False falls back to plain GATEncoder
+
     # GAT encoder
     gat_hidden_dim: int = 64
     gat_num_heads: int = 4
