@@ -32,6 +32,7 @@ from src.api.schemas import (
 from src.api.data_cache import DataLoader
 from src.api.graph_builder import build_real_graph
 from src.api.matchup_engine import build_real_matchup, MatchupNotFoundError
+from src.api.bracket_runner import build_real_simulation
 
 logger = logging.getLogger(__name__)
 
@@ -304,6 +305,12 @@ async def post_matchup(req: MatchupRequest) -> MatchupResponse:
 
 @app.post("/api/bracket/simulate", response_model=SimulateResponse)
 async def post_simulate(req: SimulateRequest) -> SimulateResponse:
+    if os.getenv("USE_REAL_DATA", "").lower() in ("1", "true", "yes"):
+        try:
+            season = getattr(req, "season", 2024)
+            return build_real_simulation(req.teams, req.n_simulations, season, loader=_data_loader)
+        except Exception as exc:
+            logger.warning("Real simulation failed, falling back to stub: %s", exc)
     return _build_stub_simulate(req.teams, req.n_simulations)
 
 
