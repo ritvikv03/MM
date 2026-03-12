@@ -52,6 +52,7 @@ class GraphResponse(BaseModel):
     conferences:      List[ConferenceNodeResponse]
     games:            List[GameEdgeResponse]
     conference_edges: List[ConferenceEdgeResponse]
+    data_source:      str = "stub"
 
 
 # ── Matchup ───────────────────────────────────────────────────────────────────
@@ -71,6 +72,7 @@ class MatchupResponse(BaseModel):
     spread_mean:    float
     spread_samples: List[float]
     luck_compressed: bool
+    data_source:    str = "stub"
 
 
 # ── Bracket simulate ──────────────────────────────────────────────────────────
@@ -89,3 +91,4 @@ class TeamAdvancementItem(BaseModel):
 class SimulateResponse(BaseModel):
     n_simulations: int
     advancements:  List[TeamAdvancementItem]
+    data_source:   str = "stub"

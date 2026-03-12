@@ -181,6 +181,7 @@ def _build_stub_graph(season: int) -> GraphResponse:
     return GraphResponse(
         teams=teams, conferences=conferences,
         games=games, conference_edges=conf_edges,
+        data_source="stub",
     )
 
 
@@ -211,6 +212,7 @@ def _build_stub_matchup(
         spread_mean=spread_mean,
         spread_samples=spread_samples,
         luck_compressed=abs(luck) > 0.05,
+        data_source="stub",
     )
 
 
@@ -251,6 +253,7 @@ def _build_stub_simulate(teams: list[str], n_simulations: int) -> SimulateRespon
     return SimulateResponse(
         n_simulations=n_simulations,
         advancements=advancements,
+        data_source="stub",
     )
 
 

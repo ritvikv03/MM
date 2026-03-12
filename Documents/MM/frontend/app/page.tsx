@@ -13,6 +13,29 @@ import type { GraphResponse, TeamNode } from '@/lib/api-types';
 import { fetchGraph } from '@/lib/api';
 import { getMockGraph } from '@/lib/mock-data';
 
+function StubDataBanner({ dataSource }: { dataSource: 'real' | 'stub' | 'unknown' }) {
+  if (dataSource === 'real') return null;
+  return (
+    <div style={{
+      position: 'fixed',
+      top: 0,
+      left: 0,
+      right: 0,
+      zIndex: 9999,
+      background: '#d4a843',
+      color: '#1a1208',
+      textAlign: 'center',
+      padding: '6px 16px',
+      fontSize: '12px',
+      fontWeight: 700,
+      letterSpacing: '0.04em',
+      lineHeight: 1.4,
+    }}>
+      ⚠ Synthetic data active — real model offline. Results are illustrative only.
+    </div>
+  );
+}
+
 import dynamic from 'next/dynamic';
 const FullBracket = dynamic(
   () => import('@/components/bracket/BracketSimulator').then(m => ({ default: m.FullBracket })),
@@ -30,6 +53,7 @@ export default function HomePage() {
   const [graphData, setGraphData] = useState<GraphResponse>(getMockGraph());
   const [graphLoading, setGraphLoading] = useState(false);
   const [selectedTeam, setSelectedTeam] = useState<string | null>(null);
+  const [dataSource, setDataSource] = useState<'real' | 'stub' | 'unknown'>('unknown');
 
   useEffect(() => {
     fetch('http://localhost:8000/health')
@@ -41,7 +65,10 @@ export default function HomePage() {
   useEffect(() => {
     setGraphLoading(true);
     fetchGraph(season)
-      .then(setGraphData)
+      .then((data) => {
+        setGraphData(data);
+        setDataSource(data.data_source === 'real' ? 'real' : 'stub');
+      })
       .finally(() => setGraphLoading(false));
   }, [season]);
 
@@ -51,6 +78,7 @@ export default function HomePage() {
 
   return (
     <div style={{ display: 'flex', height: '100vh', background: 'var(--hardwood-dark)', overflow: 'hidden', position: 'relative' }}>
+      <StubDataBanner dataSource={dataSource} />
       {/* Court watermark */}
       <div style={{
         position: 'fixed', top: '50%', left: '55%',
