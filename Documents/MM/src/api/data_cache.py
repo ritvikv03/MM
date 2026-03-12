@@ -26,6 +26,8 @@ _COLUMN_ALIASES: dict[str, str] = {
     "adjoe": "adj_oe",
     "adjde": "adj_de",
     "adjt": "tempo",
+    # Barttorvik uses "conf" — normalize to "conference"
+    "conf": "conference",
 }
 
 
@@ -96,6 +98,13 @@ class DataLoader:
         try:
             df = fetch_trank(season)
             df = df.rename(columns=_COLUMN_ALIASES)
+            # Ensure required columns exist with sensible defaults
+            if "luck" not in df.columns:
+                df["luck"] = 0.0
+            if "seed" not in df.columns:
+                df["seed"] = 16
+            if "conference" not in df.columns:
+                df["conference"] = "Unknown"
             df.to_parquet(cache_path, index=False)
             return df
         except Exception as exc:  # noqa: BLE001
