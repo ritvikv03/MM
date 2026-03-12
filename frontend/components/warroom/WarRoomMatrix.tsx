@@ -79,7 +79,7 @@ export function WarRoomMatrix() {
       <div className="glass-highlight p-4 rounded-lg mb-2" style={{ borderLeft: '3px solid #2ecc71' }}>
         <p style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: '1.5' }}>
           <strong>Leverage Score = (True Win Prob / Public Pick %).</strong> <br/>
-          Identify market inefficiencies. <span style={{ color: '#2ecc71' }}>Green</span> indicates under-owned value. <span style={{ color: '#e74c3c' }}>Red</span> indicates over-owned "toxic chalk" to fade in large pools.
+          Identify market inefficiencies. <span style={{ color: '#2ecc71' }}>Green</span> indicates under-owned value. <span style={{ color: '#e74c3c' }}>Red</span> indicates over-owned "toxic chalk" to fade in large bracket contests (competitions where many people submit brackets).
         </p>
       </div>
 

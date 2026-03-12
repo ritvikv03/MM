@@ -166,10 +166,10 @@ function generateNarrative(a: MockTeam, b: MockTeam, pWin: number): Interrogator
 
   if (upsetProb > 0.40) {
     narrative = `🚨 UPSET ALERT: (${upsetTeam.seed}) ${upsetTeam.name} has a ${(upsetProb * 100).toFixed(0)}% shot. ${upsetTeam.playStyle}. ${favTeam.name}'s luck metric ${favTeam.luck.toFixed(2)} suggests regression.`;
-    recommendation = `HIGH-VALUE LEVERAGE: Pick ${upsetTeam.name} in large pools for differentiation.`;
+    recommendation = `HIGH-VALUE LEVERAGE: Pick ${upsetTeam.name} in large bracket contests for differentiation.`;
   } else if (Math.abs(pWin - 0.5) < 0.08) {
     narrative = `⚖️ COIN FLIP: ${a.name} (${a.playStyle}) vs ${b.name} (${b.playStyle}). Comparable efficiency profiles.`;
-    recommendation = `POOL STRATEGY: Take the lower seed for leverage in large pools.`;
+    recommendation = `BRACKET STRATEGY: Take the lower seed for leverage in large bracket contests.`;
   } else {
     const fav = pWin > 0.5 ? a : b;
     const dog = pWin > 0.5 ? b : a;

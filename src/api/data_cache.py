@@ -138,7 +138,7 @@ class DataLoader:
                 json.dump(seeds, fh)
             return seeds
 
-        except Exception as exc:  # noqa: BLE001
+        except BaseException as exc:  # noqa: BLE001 — Kaggle calls sys.exit() on auth failure
             logger.warning(
                 "DataLoader.get_tournament_seeds(%s) failed — returning {}. "
                 "Error: %s",

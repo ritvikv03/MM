@@ -221,7 +221,7 @@ export function Projections2026() {
                    <div className="text-[10px] text-zinc-500 tracking-widest mb-2 font-bold">CHAMPIONSHIP EDGE</div>
                    <div className="text-center mt-2">
                      <div className="text-[#d4a843] font-bold mb-1">Duke 54% vs Michigan 46%</div>
-                     <div className="text-[10px] text-zinc-500 leading-tight">Pick Duke in &lt;1000 pools.<br/>Pick Michigan in mega-pools for raw EV leverage.</div>
+                     <div className="text-[10px] text-zinc-500 leading-tight">Pick Duke in small bracket contests (&lt;1000 entries).<br/>Pick Michigan in mega-contests for Upset Edge advantage.</div>
                    </div>
                  </div>
                </div>
