@@ -67,6 +67,8 @@ def _validate_shapes(*arrays: np.ndarray) -> None:
 def compute_clv_weight(y_pred: float, p_close: float, lam: float = 1.0) -> float:
     """Return the CLV multiplier ``(1 + λ × |y_pred - p_close|)``.
 
+    Accepts scalar inputs only; for batch use, see batch_market_loss.
+
     Parameters
     ----------
     y_pred:
@@ -150,6 +152,8 @@ class MarketAlignedLoss:
         -------
         float
             Gradient with respect to y_pred.
+            Note: the returned gradient may push y_pred outside [0, 1] —
+            clamping is the optimizer's responsibility.
         """
         _validate_prob(y_pred, "y_pred")
         _validate_prob(y_true, "y_true")
@@ -234,6 +238,7 @@ def clv_decomposition(
     y_true = np.asarray(y_true, dtype=float)
     p_close = np.asarray(p_close, dtype=float)
 
+    _validate_lam(lam)
     _validate_shapes(y_pred, y_true, p_close)
     _validate_prob_array(y_pred, "y_pred")
     _validate_prob_array(y_true, "y_true")

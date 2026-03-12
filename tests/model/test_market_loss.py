@@ -222,6 +222,18 @@ class TestMarketAlignedLossGradient:
         with pytest.raises(ValueError):
             loss.gradient(1.5, 0.5, 0.5)
 
+    def test_gradient_at_lower_boundary(self):
+        """gradient(0.0, 0.0, 0.5) should return a float without raising."""
+        loss = MarketAlignedLoss(lam=1.0)
+        result = loss.gradient(0.0, 0.0, 0.5)
+        assert isinstance(result, float)
+
+    def test_gradient_at_upper_boundary(self):
+        """gradient(1.0, 1.0, 0.5) should return a float without raising."""
+        loss = MarketAlignedLoss(lam=1.0)
+        result = loss.gradient(1.0, 1.0, 0.5)
+        assert isinstance(result, float)
+
 
 # ===========================================================================
 # batch_market_loss
