@@ -188,6 +188,14 @@ class TestFetchTrank:
     @responses_lib.activate
     def test_passes_year_param(self):
         """fetch_trank must include `year=<season>` in the query string."""
+        # JSON endpoint is tried first; register it so it "fails" gracefully
+        # (returns a non-JSON body) and the HTML fallback is exercised.
+        responses_lib.add(
+            responses_lib.GET,
+            "https://barttorvik.com/2022_team_results.json",
+            body="not-json",
+            status=200,
+        )
         responses_lib.add(
             responses_lib.GET,
             "https://www.barttorvik.com/trank.php",
@@ -195,8 +203,10 @@ class TestFetchTrank:
             status=200,
         )
         self.fetch_trank(season=2022)
-        assert len(responses_lib.calls) == 1
-        assert "year=2022" in responses_lib.calls[0].request.url
+        # Two calls total: JSON attempt + HTML fallback
+        assert len(responses_lib.calls) == 2
+        html_call_url = responses_lib.calls[1].request.url
+        assert "year=2022" in html_call_url
 
     def test_raises_value_error_for_season_before_2008(self):
         with pytest.raises(ValueError, match="season"):
@@ -220,7 +230,15 @@ class TestFetchTrank:
 
     @responses_lib.activate
     def test_retries_on_500_then_succeeds(self):
-        """First call returns 500; second returns 200 — must retry and succeed."""
+        """First HTML call returns 500; second returns 200 — must retry and succeed."""
+        # JSON endpoint is tried first; register it to fail gracefully (non-JSON body)
+        # so the HTML fallback path is exercised.
+        responses_lib.add(
+            responses_lib.GET,
+            "https://barttorvik.com/2024_team_results.json",
+            body="not-json",
+            status=200,
+        )
         responses_lib.add(
             responses_lib.GET,
             "https://www.barttorvik.com/trank.php",
@@ -236,7 +254,8 @@ class TestFetchTrank:
         with patch("src.data.barttorvik.time.sleep"):
             df = self.fetch_trank(season=2024)
         assert isinstance(df, pd.DataFrame)
-        assert len(responses_lib.calls) == 2
+        # 3 calls total: 1 JSON attempt + 2 HTML attempts (500 then 200)
+        assert len(responses_lib.calls) == 3
 
     @responses_lib.activate
     def test_raises_after_max_retries(self):

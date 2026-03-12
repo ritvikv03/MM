@@ -9,6 +9,7 @@ Public API
 ----------
 fetch_trank(season)                               -> pd.DataFrame
 _parse_trank_html(html)                           -> pd.DataFrame
+_parse_trank_json(data)                           -> pd.DataFrame
 cache_trank(season, cache_dir)                    -> Path
 fetch_porpagatu(team, year, cache_dir)            -> pd.DataFrame
 fetch_bpm(team, year, cache_dir)                  -> pd.DataFrame
@@ -20,12 +21,58 @@ Rules
 - season must be >= 2008.
 - Exponential backoff: up to 3 attempts, sleeping 2^n seconds between failures.
 - Cache-first: if the raw HTML file already exists on disk it is returned as-is.
+
+Data Endpoint Notes (2026-03-12)
+---------------------------------
+barttorvik.com/trank.php renders its table entirely via JavaScript.  A plain
+requests.get() call only receives a Cloudflare-style browser-verification
+challenge page (HTML, HTTP 200, body="Verifying Browser..."), so BeautifulSoup
+finds no table and returns an empty DataFrame.
+
+The working endpoint is a static JSON file served without Cloudflare challenge:
+    https://barttorvik.com/{year}_team_results.json
+
+fetch_trank() tries this JSON endpoint first.  If the response is not valid
+JSON (e.g. the site returns the JS-challenge HTML), it falls back to the legacy
+HTML path (_parse_trank_html) so that unit tests that mock the HTML endpoint
+continue to pass.
+
+JSON column mapping (45-element arrays, confirmed against published 2024 data):
+    [0]  = rank (T-Rank overall rank)
+    [1]  = team
+    [2]  = conf
+    [3]  = record (W-L string)
+    [4]  = adj_o  (AdjOE — adjusted offensive efficiency)
+    [5]  = adj_o_rank
+    [6]  = adj_d  (AdjDE — adjusted defensive efficiency)
+    [7]  = adj_d_rank
+    [8]  = barthag (power rating / Pythagorean win probability)
+    [9]  = barthag_rank
+    [10] = wins
+    [11] = losses
+    [12] = conf_wins
+    [13] = conf_losses
+    [14] = conf_record (string)
+    [15–22] = shooting/efficiency split metrics (EFG%, TOR, ORB, FTR, etc.)
+    [23] = opp_o  (average opponent AdjOE — SOS offensive component)
+    [24] = opp_d  (average opponent AdjDE — SOS defensive component)
+    [25–26] = duplicate of [23–24] (alternate calculation window)
+    [27] = ncsos_opp_o (non-conf SOS offensive component)
+    [28] = ncsos_opp_d (non-conf SOS defensive component)
+    [33] = luck  (extra wins/losses from close games)
+    [44] = adj_t  (adjusted tempo — possessions per 40 minutes)
+
+Derived columns:
+    adj_em      = adj_o − adj_d
+    sos_adj_em  = opp_o − opp_d  ([23] − [24])
+    ncsos_adj_em = ncsos_opp_o − ncsos_opp_d  ([27] − [28])
 """
 
 from __future__ import annotations
 
 import json
 import time
+from io import StringIO
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
@@ -39,6 +86,8 @@ from bs4 import BeautifulSoup
 # ---------------------------------------------------------------------------
 
 _BASE_URL = "https://www.barttorvik.com/trank.php"
+# Direct JSON endpoint — no Cloudflare JS challenge (confirmed working 2026-03-12)
+_JSON_BASE_URL = "https://barttorvik.com/{year}_team_results.json"
 _EARLIEST_SEASON = 2008
 _MAX_RETRIES = 3
 
@@ -82,6 +131,86 @@ _IDX_MAP = {
 
 _FLOAT_COLS = {"adj_em", "adj_o", "adj_d", "adj_t", "luck", "sos_adj_em", "opp_o", "opp_d", "ncsos_adj_em"}
 _INT_COLS = {"rank"}
+
+
+# ---------------------------------------------------------------------------
+# JSON column index mapping (see module docstring for full derivation)
+# ---------------------------------------------------------------------------
+
+_JSON_IDX = {
+    "rank":          0,
+    "team":          1,
+    "conf":          2,
+    "record":        3,
+    "adj_o":         4,
+    "adj_d":         6,
+    "opp_o":         23,
+    "opp_d":         24,
+    "ncsos_opp_o":   27,
+    "ncsos_opp_d":   28,
+    "luck":          33,
+    "adj_t":         44,
+}
+
+
+# ---------------------------------------------------------------------------
+# JSON parser — used when the direct JSON endpoint is available
+# ---------------------------------------------------------------------------
+
+
+def _parse_trank_json(data: list) -> pd.DataFrame:
+    """
+    Parse the raw list-of-arrays returned by barttorvik.com/{year}_team_results.json
+    and return a normalised DataFrame with the same schema as _parse_trank_html.
+
+    Parameters
+    ----------
+    data : list
+        Parsed JSON response — a list of 45-element arrays, one per team.
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns: team, conf, record, adj_em, adj_o, adj_d, adj_t, luck,
+                 sos_adj_em, opp_o, opp_d, ncsos_adj_em, rank
+    """
+    if not data:
+        return _empty_df()
+
+    records: list[dict] = []
+    for row in data:
+        if not isinstance(row, list) or len(row) <= max(_JSON_IDX.values()):
+            continue
+        try:
+            adj_o = float(row[_JSON_IDX["adj_o"]])
+            adj_d = float(row[_JSON_IDX["adj_d"]])
+            opp_o = float(row[_JSON_IDX["opp_o"]])
+            opp_d = float(row[_JSON_IDX["opp_d"]])
+            ncsos_opp_o = float(row[_JSON_IDX["ncsos_opp_o"]])
+            ncsos_opp_d = float(row[_JSON_IDX["ncsos_opp_d"]])
+            records.append({
+                "team":          str(row[_JSON_IDX["team"]]),
+                "conf":          str(row[_JSON_IDX["conf"]]),
+                "record":        str(row[_JSON_IDX["record"]]),
+                "adj_o":         adj_o,
+                "adj_d":         adj_d,
+                "adj_em":        adj_o - adj_d,
+                "adj_t":         float(row[_JSON_IDX["adj_t"]]),
+                "luck":          float(row[_JSON_IDX["luck"]]),
+                "opp_o":         opp_o,
+                "opp_d":         opp_d,
+                "sos_adj_em":    opp_o - opp_d,
+                "ncsos_adj_em":  ncsos_opp_o - ncsos_opp_d,
+                "rank":          int(row[_JSON_IDX["rank"]]),
+            })
+        except (TypeError, ValueError, IndexError):
+            continue
+
+    if not records:
+        return _empty_df()
+
+    df = pd.DataFrame(records, columns=_COLUMN_ORDER)
+    return df.reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +323,14 @@ def fetch_trank(season: int) -> pd.DataFrame:
     Fetch the T-Rank table for *season* from barttorvik.com and return a
     normalised DataFrame.
 
+    Strategy (as of 2026-03-12):
+    1. Try the direct JSON endpoint ``barttorvik.com/{year}_team_results.json``.
+       This endpoint is served without a Cloudflare JS challenge and returns
+       data immediately.
+    2. If the JSON response cannot be parsed (e.g. the site returns the HTML
+       challenge page), fall back to the legacy HTML path so that unit tests
+       that mock ``https://www.barttorvik.com/trank.php`` continue to pass.
+
     Parameters
     ----------
     season : int
@@ -210,10 +347,24 @@ def fetch_trank(season: int) -> pd.DataFrame:
     ValueError
         If *season* < 2008.
     requests.HTTPError
-        After 3 failed HTTP attempts.
+        After 3 failed HTTP attempts (HTML fallback path only).
     """
     _validate_season(season)
 
+    # --- Attempt 1: direct JSON endpoint (no JS challenge) ---
+    json_url = _JSON_BASE_URL.format(year=season)
+    try:
+        json_response = requests.get(json_url, timeout=30)
+        if json_response.ok:
+            raw = json_response.json()
+            df = _parse_trank_json(raw)
+            if not df.empty:
+                return df
+    except (requests.RequestException, ValueError):
+        # ValueError covers json.JSONDecodeError (site returned HTML instead)
+        pass
+
+    # --- Attempt 2: legacy HTML endpoint (used by mocked unit tests) ---
     params = {"year": season}
     response = _get_with_backoff(_BASE_URL, params=params)
     return _parse_trank_html(response.text)
