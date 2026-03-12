@@ -31,6 +31,7 @@ from src.api.schemas import (
 )
 from src.api.data_cache import DataLoader
 from src.api.graph_builder import build_real_graph
+from src.api.matchup_engine import build_real_matchup, MatchupNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -290,6 +291,14 @@ async def post_matchup(req: MatchupRequest) -> MatchupResponse:
         raise HTTPException(status_code=422, detail="home_team and away_team must be non-empty")
     if home.lower() == away.lower():
         raise HTTPException(status_code=422, detail="home_team and away_team must be different")
+    if os.getenv("USE_REAL_DATA", "").lower() in ("1", "true", "yes"):
+        try:
+            return build_real_matchup(home, away, req.season, req.neutral_site,
+                                      loader=_data_loader)
+        except MatchupNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except Exception as exc:
+            logger.warning("Real matchup failed, falling back to stub: %s", exc)
     return _build_stub_matchup(home, away, req.season, req.neutral_site)
 
 
