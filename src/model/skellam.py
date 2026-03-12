@@ -196,7 +196,7 @@ def zero_truncated_skellam_log_pmf(k, mu1, mu2):
             pt.as_tensor_variable(mu2).astype("float64"),
         )
 
-    except (ImportError, TypeError):
+    except (ImportError, TypeError, AttributeError):
         # Pure numpy fallback (no pytensor available)
         return _numpy_zt_skellam_log_pmf(k, mu1, mu2)
 
