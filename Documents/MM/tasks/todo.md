@@ -1,23 +1,14 @@
-# Session Tasks — Frontend Overhaul + Interactive All-Rounds Bracket
-_Completed: 2026-03-11_
+# Session Tasks — 2026-03-11 Repository Audit & Hardening
 
 ## Completed
-- [x] Step 1 — CLAUDE.md §10 agentic workflow rules (8 rules appended)
-- [x] Step 2 — tasks/ directory bootstrap (todo.md + lessons.md)
-- [x] Step 3 — Fix api.ts: fetchMatchup now merges real API p_win_home/spread_mean/samples; mock enrichment fills remaining fields
-- [x] Step 4 — Fix page.tsx: useEffect([season]) triggers fetchGraph → setGraphData; 'graph' nav page renders ConstellationCanvas
-- [x] Step 5 — Fix TeamNode.tsx: THREE.Color(`#${node.color.toString(16).padStart(6,'0')}`) — hex string not raw int
-- [x] Step 6 — BasketballCourt3D.tsx: canvas-texture NCAA court on PlaneGeometry(22,11.7), hardwood gradient + all court lines + backboards
-- [x] Step 7 — ConstellationCanvas.tsx: camera [0,14,10] overhead, HemisphereLight, removed Stars, added BasketballCourt3D
-- [x] Step 8 — Sidebar.tsx: added 'graph' to NavPage type + GraphIcon + NAV_ITEMS entry
-- [x] Step 9 — BracketSimulator.tsx: full 6-round rewrite with computeBracket() pure function, BracketGame state machine, cascade logic, user picks Map, RegionPanel + MiniGameCell + LargeGameCell, Interrogator sidebar, chaos slider, WPA sliders, reset button, simulate button
-- [x] Step 10 — BracketHeatmap.tsx: SVG grid, teams sorted by Championship prob, probToHeatColor cells, round labels
-- [x] Step 11 — bracket-utils.ts: added getAdvancementProb, rankByRound, normalizeEntropy, topChampionshipContenders; fixed probToHeatColor to return rgb() format with clamping
+- [x] Step 1 — Fixed vitest.config.ts: added `exclude: ['e2e/**', 'node_modules/**']` — Vitest was picking up Playwright e2e spec and crashing due to duplicate `@playwright/test` version
+- [x] Step 2 — Audited all 19 untracked src/ files and 10 test files before staging; no logic errors or stubs returning None found
+- [x] Step 3 — Staged and committed all untracked backend modules (33 files, 4665 lines): API server, Phase 5–9 betting/simulation/data/model modules, all corresponding test files, pyproject.toml, requirements.txt, .gitignore
+- [x] Step 4 — Fixed requirements.txt: added `fastapi>=0.115` + `uvicorn[standard]>=0.30` (API server was locally unrunnable without these)
+- [x] Step 5 — Fixed news_scraper.py:105: replaced hardcoded `"data/asymmetry_alerts.json"` with `pathlib.Path(__file__).parent.parent.parent / "data"` — would fail when CWD ≠ project root
 
 ## Verification Results
-- [x] `python -m pytest tests/ -q` — 1018 passed, 7 skipped
-- [x] `npx vitest run` — 70 passed (all 8 test files)
-- [x] `npx tsc --noEmit` — 0 errors
-- [ ] Live: Bracket R64 → Championship cascade (requires browser)
-- [ ] Live: Graph page basketball court (requires browser)
-- [ ] Live: Season change reloads graph (requires browser)
+- [x] `python -m pytest tests/ -q` → 1018 passed, 7 skipped (torch_geometric not installed — intentional)
+- [x] `cd frontend && npx vitest run` → 8 files, 70 tests, 0 failures
+- [x] `npx tsc --noEmit` → 0 errors
+- [x] `git push origin main` → pushed commit `0537d35`
