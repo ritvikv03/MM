@@ -1,6 +1,7 @@
 """Tests for src/api/data_cache.py — cache-first DataLoader."""
 import json
 import os
+import importlib
 from unittest.mock import patch, MagicMock
 
 import pandas as pd
@@ -159,3 +160,70 @@ class TestDataLoader:
         assert "adj_de" in result.columns, "adj_d should be renamed to adj_de"
         assert "tempo" in result.columns, "adj_t should be renamed to tempo"
         assert "team" in result.columns, "team_name should be renamed to team"
+
+    def test_corrupt_parquet_triggers_refetch(self, tmp_path):
+        """A corrupt parquet file is deleted and re-fetched, not silently returned as empty."""
+        from src.api.data_cache import DataLoader
+
+        loader = DataLoader(cache_dir=str(tmp_path))
+        cache_path = tmp_path / "trank_2024.parquet"
+        # Write junk bytes to simulate corruption
+        cache_path.write_bytes(b"not a parquet file")
+        mock_df = pd.DataFrame({
+            "team": ["Duke"],
+            "adj_oe": [118.0],
+            "adj_de": [92.0],
+            "tempo": [70.0],
+            "luck": [0.01],
+            "seed": [1],
+            "conference": ["ACC"],
+        })
+        with patch("src.api.data_cache.fetch_trank", return_value=mock_df) as mock_fn:
+            result = loader.get_trank(season=2024)
+
+        assert mock_fn.call_count == 1       # re-fetched
+        assert len(result) == 1              # real data returned, not empty
+        assert not cache_path.exists() or pd.read_parquet(cache_path).shape[0] == 1  # new clean cache
+
+
+# ---------------------------------------------------------------------------
+# Lazy-import wrapper tests
+# ---------------------------------------------------------------------------
+
+class TestLazyImportWrappers:
+    def test_fetch_trank_wrapper_delegates_to_barttorvik(self):
+        """Module-level fetch_trank wrapper correctly imports and delegates."""
+        mock_df = pd.DataFrame({
+            "team": ["Duke"],
+            "adj_oe": [118.0],
+            "adj_de": [92.0],
+            "tempo": [70.0],
+            "luck": [0.01],
+            "seed": [1],
+            "conference": ["ACC"],
+        })
+        barttorvik = pytest.importorskip("src.data.barttorvik")
+        with patch("src.data.barttorvik.fetch_trank", return_value=mock_df):
+            from src.api import data_cache
+            importlib.reload(data_cache)
+            result = data_cache.fetch_trank(season=2024)
+        assert isinstance(result, pd.DataFrame)
+
+    def test_load_tournament_seeds_wrapper_delegates_to_kaggle(self):
+        """Module-level load_tournament_seeds wrapper correctly imports and delegates."""
+        mock_seeds = {"Duke": 1, "Kansas": 1}
+        kaggle_ingestion = pytest.importorskip("src.data.kaggle_ingestion")
+        with patch("src.data.kaggle_ingestion.load_seeds", return_value=mock_seeds):
+            from src.api import data_cache
+            importlib.reload(data_cache)
+            result = data_cache.load_tournament_seeds(season=2024)
+        assert isinstance(result, dict)
+
+    def test_fetch_trank_wrapper_propagates_exception(self):
+        """Wrapper re-raises exceptions so DataLoader can catch them."""
+        barttorvik = pytest.importorskip("src.data.barttorvik")
+        with patch("src.data.barttorvik.fetch_trank", side_effect=ConnectionError("network down")):
+            from src.api import data_cache
+            importlib.reload(data_cache)
+            with pytest.raises(ConnectionError):
+                data_cache.fetch_trank(season=2024)

@@ -41,8 +41,13 @@ def fetch_trank(season: int) -> pd.DataFrame:
 
 
 def load_tournament_seeds(season: int) -> dict[str, int]:
-    """Lazy wrapper around src.data.kaggle_ingestion.load_tournament_seeds."""
-    from src.data.kaggle_ingestion import load_tournament_seeds as _load_seeds  # type: ignore
+    """Lazy wrapper around src.data.kaggle_ingestion.load_seeds.
+
+    Delegates to ``load_seeds`` from the kaggle_ingestion module.  The *season*
+    argument is passed through; callers are responsible for supplying a valid
+    filepath or season identifier as required by the underlying function.
+    """
+    from src.data.kaggle_ingestion import load_seeds as _load_seeds  # type: ignore
 
     return _load_seeds(season)
 
@@ -74,22 +79,28 @@ class DataLoader:
 
         On any exception (network failure, missing parquet dependencies, etc.)
         logs a warning and returns an empty :class:`~pandas.DataFrame`.
+        If the cached parquet file is corrupt, it is deleted and the data is
+        re-fetched from the source.
         """
         cache_path = self._cache_dir / f"trank_{season}.parquet"
-
-        try:
-            if cache_path.exists():
+        if cache_path.exists():
+            try:
                 return pd.read_parquet(cache_path)
-
+            except Exception as read_exc:
+                logger.warning(
+                    "Corrupt parquet cache for season %s (%s). Deleting and re-fetching.",
+                    season,
+                    read_exc,
+                )
+                cache_path.unlink(missing_ok=True)
+        try:
             df = fetch_trank(season)
             df = df.rename(columns=_COLUMN_ALIASES)
             df.to_parquet(cache_path, index=False)
             return df
-
         except Exception as exc:  # noqa: BLE001
             logger.warning(
-                "DataLoader.get_trank(%s) failed — returning empty DataFrame. "
-                "Error: %s",
+                "Barttorvik fetch failed (season=%s): %s. Returning empty.",
                 season,
                 exc,
             )
