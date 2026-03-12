@@ -14,6 +14,7 @@ All responses match the Zod contracts in frontend/lib/api-types.ts exactly.
 """
 from __future__ import annotations
 
+import logging
 import math
 import os
 import random
@@ -28,6 +29,14 @@ from src.api.schemas import (
     MatchupRequest, MatchupResponse,
     SimulateRequest, SimulateResponse, TeamAdvancementItem,
 )
+from src.api.data_cache import DataLoader
+from src.api.graph_builder import build_real_graph
+
+logger = logging.getLogger(__name__)
+
+# Module-level singleton — avoids re-initialising the cache directory on every
+# request and allows the DataLoader to serve cached parquet/JSON files cheaply.
+_data_loader = DataLoader()
 
 app = FastAPI(
     title="Ethereal Oracle API",
@@ -265,6 +274,11 @@ def _build_stub_simulate(teams: list[str], n_simulations: int) -> SimulateRespon
 async def get_graph(
     season: int = Query(default=2024, ge=2010, le=2030),
 ) -> GraphResponse:
+    if os.getenv("USE_REAL_DATA", "").lower() in ("1", "true", "yes"):
+        try:
+            return build_real_graph(season=season, loader=_data_loader)
+        except Exception as exc:
+            logger.warning("Real graph failed, falling back to stub: %s", exc)
     return _build_stub_graph(season)
 
 
