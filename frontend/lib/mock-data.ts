@@ -221,7 +221,7 @@ export function getMockGraph(): GraphResponse {
   }
   const confList = Object.entries(CONFERENCES).slice(0, 10).map(([id, c]) => ({ id, name: c.name, x: 0, y: 0, z: 0, color: c.color }));
   const conference_edges = teams.map(t => ({ source: t.id, target: t.conference, edge_type: 'member_of' as const }));
-  return { teams, conferences: confList, games, conference_edges };
+  return { teams, conferences: confList, games, conference_edges, data_source: 'stub' };
 }
 
 export function getMockMatchup(home: string, away: string): EnrichedMatchupResponse {
@@ -270,7 +270,7 @@ export function getMockSimulation(teams: string[], nSims: number): SimulateRespo
     });
     return { team: name, advancement_probs: probs, entropy: 1.5 + Math.random() };
   });
-  return { n_simulations: nSims, advancements };
+  return { n_simulations: nSims, advancements, data_source: 'stub' };
 }
 
 // Generate 3 bracket variants
