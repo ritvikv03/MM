@@ -240,6 +240,151 @@ def make_gat_encoder(config: dict) -> "GATEncoder":
 # Standalone utility
 # ---------------------------------------------------------------------------
 
+
+# ---------------------------------------------------------------------------
+# EntropyGatedGATEncoder
+# ---------------------------------------------------------------------------
+
+class EntropyGatedGATEncoder(GATEncoder):
+    """GAT encoder with per-layer Shannon Entropy gating.
+
+    After each GATConv aggregates neighbour messages, a learned sigmoid gate
+    conditioned on the receiving team's entropy features modulates how much
+    of that aggregated information flows through:
+
+        gate_i  = sigmoid(Linear(entropy_feat_dim -> hidden_dim)(entropy_feats))
+        h_raw   = GATConv(h, edge_index, edge_attr)
+        h       = h_raw * gate_i          # element-wise
+        h       = BatchNorm(h) -> ELU -> Dropout
+
+    Three conditioning signals from shannon_entropy.py:
+        scoring_entropy_normalized    in [0, 1]  high = consistent offense
+        kill_shot_vulnerability       in [0, 1]  high = allows big runs
+        kill_shot_p_run_given_trading in [0, 1]  P(run | trading baskets)
+
+    When entropy_feats=None the gate is skipped entirely, preserving full
+    backward compatibility with GATEncoder.
+
+    References: Hu et al. "Squeeze-and-Excitation Networks" CVPR 2018.
+    """
+
+    def __init__(
+        self,
+        node_in_features: int,
+        edge_in_features: int,
+        hidden_dim: int = 64,
+        num_heads: int = 4,
+        num_layers: int = 2,
+        dropout: float = 0.1,
+        entropy_feat_dim: int = 3,
+    ) -> None:
+        super().__init__(
+            node_in_features=node_in_features,
+            edge_in_features=edge_in_features,
+            hidden_dim=hidden_dim,
+            num_heads=num_heads,
+            num_layers=num_layers,
+            dropout=dropout,
+        )
+        import importlib
+        nn = importlib.import_module("torch.nn")
+        self.entropy_feat_dim = entropy_feat_dim
+        # One Linear(entropy_feat_dim -> hidden_dim) gate projection per GAT layer.
+        self._gate_layers = [
+            nn.Linear(entropy_feat_dim, hidden_dim, bias=True)
+            for _ in range(num_layers)
+        ]
+        self._sigmoid = nn.Sigmoid() if hasattr(nn, "Sigmoid") else None
+
+    def parameters(self, recurse: bool = True):
+        """Yield parameters from all sub-layers including gate projections."""
+        sources = [
+            self._gat_layers,
+            self._bn_layers,
+            self._gate_layers,
+            [self._act],
+            [self._dropout],
+        ]
+        for src in sources:
+            for layer in src:
+                if hasattr(layer, "parameters"):
+                    yield from layer.parameters(recurse=recurse)
+
+    def eval(self):
+        super().eval()
+        for layer in self._gate_layers:
+            if hasattr(layer, "eval"):
+                layer.eval()
+        return self
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        for layer in self._gate_layers:
+            if hasattr(layer, "train"):
+                layer.train(mode)
+        return self
+
+    def forward(
+        self,
+        x,
+        edge_index,
+        edge_attr,
+        entropy_feats=None,
+    ):
+        """Entropy-gated GAT forward pass.
+
+        Parameters
+        ----------
+        x : Tensor (N, node_in_features)
+        edge_index : Tensor (2, E) int64
+        edge_attr : Tensor (E, edge_in_features)
+        entropy_feats : Tensor (N, entropy_feat_dim) or None
+            When None the gate is skipped (identity) for full backward compat.
+
+        Returns
+        -------
+        Tensor (N, hidden_dim) float32
+        """
+        h = x
+        for gat, bn, gate_proj in zip(
+            self._gat_layers, self._bn_layers, self._gate_layers
+        ):
+            h_raw = gat(h, edge_index, edge_attr=edge_attr)
+            if entropy_feats is not None:
+                # self._sigmoid is nn.Sigmoid() stored at construction time --
+                # avoids any bare top-level or in-function torch import.
+                gate = self._sigmoid(gate_proj(entropy_feats))
+                h_raw = h_raw * gate
+            h = bn(h_raw)
+            h = self._act(h)
+            h = self._dropout(h)
+        return h
+
+    def __call__(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Factory for EntropyGatedGATEncoder
+# ---------------------------------------------------------------------------
+
+def make_entropy_gated_gat_encoder(config: dict) -> "EntropyGatedGATEncoder":
+    """Construct an EntropyGatedGATEncoder from a configuration dict.
+
+    Required keys: node_in_features, edge_in_features.
+    Optional: hidden_dim, num_heads, num_layers, dropout, entropy_feat_dim.
+    """
+    return EntropyGatedGATEncoder(
+        node_in_features=config["node_in_features"],
+        edge_in_features=config["edge_in_features"],
+        hidden_dim=config.get("hidden_dim", 64),
+        num_heads=config.get("num_heads", 4),
+        num_layers=config.get("num_layers", 2),
+        dropout=config.get("dropout", 0.1),
+        entropy_feat_dim=config.get("entropy_feat_dim", 3),
+    )
+
+
 def count_parameters(model) -> int:
     """Return the total number of trainable parameters in *model*.
 

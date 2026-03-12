@@ -24,14 +24,29 @@ Design notes
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 import pandas as pd
 
+from src.data.shannon_entropy import extract_entropy_features
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
+
+# Columns sourced from each input DataFrame.
+_EFFICIENCY_FEATURE_COLS = ["adj_em", "adj_o", "adj_d", "adj_t", "luck"]
+_BPR_FEATURE_COLS = ["team_bpr_weighted"]
+_SHOT_FEATURE_COLS = ["rim_pct", "three_pct", "transition_pct", "efg"]
+
+# Shannon Entropy gate features — kept as named columns so callers can
+# extract them into a separate (N, 3) tensor for EntropyGatedGATEncoder.
+_ENTROPY_FEATURE_COLS: List[str] = [
+    "scoring_entropy_normalized",
+    "kill_shot_vulnerability",
+    "kill_shot_p_run_given_trading",
+]
 
 _OUTPUT_COLUMNS: List[str] = [
     "team_id",
@@ -49,12 +64,10 @@ _OUTPUT_COLUMNS: List[str] = [
     "availability",
     "roster_continuity",
     "effective_strength",
-]
+] + _ENTROPY_FEATURE_COLS
 
-# Columns sourced from each input DataFrame.
-_EFFICIENCY_FEATURE_COLS = ["adj_em", "adj_o", "adj_d", "adj_t", "luck"]
-_BPR_FEATURE_COLS = ["team_bpr_weighted"]
-_SHOT_FEATURE_COLS = ["rim_pct", "three_pct", "transition_pct", "efg"]
+# Fallback values when no per-team entropy data is available.
+_ENTROPY_DEFAULTS = extract_entropy_features({})
 
 
 # ===========================================================================
@@ -85,6 +98,7 @@ class NodeFeatureBuilder:
         shot_df: pd.DataFrame,
         roster_continuity: float,
         availability_vector: float,
+        entropy_df: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         """
         Assemble per-team feature DataFrame from pre-ingested source frames.
@@ -93,25 +107,26 @@ class NodeFeatureBuilder:
         ----------
         efficiency_df : pd.DataFrame
             Must contain columns: team_id, adj_em, adj_o, adj_d, adj_t, luck.
-            Typically sourced from barttorvik or kenpom ingestion modules.
         bpr_df : pd.DataFrame
             Must contain columns: team_id, team_bpr_weighted.
-            Sourced from evanmiya ingestion module.
         shot_df : pd.DataFrame
             Must contain columns: team_id, rim_pct, three_pct, transition_pct, efg.
-            Sourced from hoopmath ingestion module.
         roster_continuity : float
-            Scalar in [0.0, 1.0].  Fraction of possessions returning from last
-            season; sourced from barttorvik returning-possession data.
+            Scalar in [0.0, 1.0].
         availability_vector : float
-            Scalar in [0.0, 1.0].  Output of injury_feed.build_availability_vector().
+            Scalar in [0.0, 1.0].
+        entropy_df : pd.DataFrame, optional
+            Must contain columns: team_id, scoring_entropy_normalized,
+            kill_shot_vulnerability, kill_shot_p_run_given_trading.
+            Sourced from shannon_entropy.extract_entropy_features() per team.
+            When omitted, all three entropy columns are filled with the
+            graceful-degradation defaults from extract_entropy_features({}).
 
         Returns
         -------
         pd.DataFrame
-            One row per team with columns exactly matching _OUTPUT_COLUMNS.
-            Missing join values are filled with 0.0 before effective_strength
-            is computed.
+            One row per team with columns exactly matching _OUTPUT_COLUMNS,
+            which now includes _ENTROPY_FEATURE_COLS at the end.
 
         Notes
         -----
@@ -133,7 +148,7 @@ class NodeFeatureBuilder:
         shot_subset = shot_df[["team_id"] + _SHOT_FEATURE_COLS].copy()
         result = result.merge(shot_subset, on="team_id", how="left")
 
-        # 4. Fill all remaining NaN values with 0.0.
+        # 4. Fill NaN values from joins with 0.0.
         result = result.fillna(0.0)
 
         # 5. Attach scalar metadata.
@@ -142,7 +157,6 @@ class NodeFeatureBuilder:
         result["season"] = self.season
 
         # 6. Compute effective_strength.
-        #    effective_strength = adj_em * availability * (0.7 + 0.3 * roster_continuity)
         continuity_factor = 0.7 + 0.3 * float(roster_continuity)
         result["effective_strength"] = (
             result["adj_em"]
@@ -150,7 +164,26 @@ class NodeFeatureBuilder:
             * continuity_factor
         )
 
-        # 7. Return with guaranteed column order.
+        # 7. Attach Shannon Entropy gate features.
+        #    If entropy_df is provided, left-join it; teams with no entropy data
+        #    (or when entropy_df is omitted entirely) receive the module defaults.
+        for col in _ENTROPY_FEATURE_COLS:
+            result[col] = float(_ENTROPY_DEFAULTS[col])  # seed with defaults
+
+        if entropy_df is not None and not entropy_df.empty:
+            entropy_subset = entropy_df[["team_id"] + _ENTROPY_FEATURE_COLS].copy()
+            # Merge on team_id; matched rows overwrite defaults, unmatched keep them.
+            result = result.merge(
+                entropy_subset, on="team_id", how="left", suffixes=("_base", "")
+            )
+            for col in _ENTROPY_FEATURE_COLS:
+                base_col = f"{col}_base"
+                if base_col in result.columns:
+                    # Where the join produced NaN (no match), fall back to the default.
+                    result[col] = result[col].fillna(result[base_col])
+                    result = result.drop(columns=[base_col])
+
+        # 8. Return with guaranteed column order.
         return result[_OUTPUT_COLUMNS].reset_index(drop=True)
 
 
