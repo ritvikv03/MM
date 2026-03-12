@@ -3,11 +3,15 @@ src/model/ensemble.py
 
 Phase 3: The "Board of Directors" Ensemble Weighting
 
-Refactors the modeling pipeline to use an Ensemble approach. The primary engine 
+Refactors the modeling pipeline to use an Ensemble approach. The primary engine
 remains the ST-GNN + Bayesian head, supported by three lightweight secondary models:
 1. The Fundamentalist: Efficiency and Rebounding
 2. The Market Reader: Sharp money and spread movement
 3. The Chaos Agent: Travel fatigue, altitude, officiating, momentum
+
+Note: For rigorous model selection, use src.model.fusion.fusion_engine.CFAFusionEngine
+(Hsu et al. 2005) which replaces the heuristic confidence-weighted voting below with
+J-curve diversity-based subset selection and rank-sum score aggregation.
 """
 
 from __future__ import annotations
