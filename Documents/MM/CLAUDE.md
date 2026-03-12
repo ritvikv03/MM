@@ -351,7 +351,7 @@ Advanced mathematical, economic, and ML theories integrated into the core engine
 
 ---
 
-*Last updated: 2026-03-11 — Boss-Level Mathematical Upgrades added (Pillars 1-2). All 57 tests pass.*
+*Last updated: 2026-03-12 — AlphaMarch upgrades (loss/fusion/sentiment/Skellam), §14 Madness Matrix terminology standards added.*
 
 ---
 
@@ -421,3 +421,23 @@ Advanced mathematical, economic, and ML theories integrated into the core engine
 - `probToHeatColor` must return `rgb(r,g,b)` (no spaces, no alpha channel) — vitest regex `^rgb\(\d+,\d+,\d+\)$` tests this.
 - R3F edge arrays: use content-based keys (`source-target`) not array index — index keys cause full re-mounts when graph data refreshes.
 - Frontend vitest: ~5s. Backend pytest: ~20s. Run `npx vitest run --reporter=dot` for fast iteration.
+
+---
+
+## 14. Brand & Terminology Standards ("Madness Matrix")
+
+**Brand Name:** Madness Matrix
+
+**Official terminology mappings** — apply in all UI copy, component labels, and user-facing strings:
+
+| Old term | Canonical replacement | Notes |
+|---|---|---|
+| "Pool" / "pools" | **"bracket contest"** or **"the tournament field"** | A "pool" is jargon; normal users submit a bracket to the NCAA or compete with friends. Use "bracket contest" for competitive groups, "tournament field" for the 68-team set. |
+| "EV" | **"Alpha Rating"** or **"Upset Edge"** | Expected Value is quant jargon. Use "Alpha Rating" for model edge score, "Upset Edge" for matchup-specific upset opportunity. |
+| "Betting" | **"Bracket Portfolio Strategy"** | |
+| "Bracket Creator" | **"Bracket Architect"** | |
+
+**In-code rules:**
+- Backend mathematical code (`kelly.py`, `leverage.py`, `hedging.py`, `rl_bracket.py`) may retain `EV`, `pool`, `BracketPoolEnvironment` as technical identifiers — these are internal APIs.
+- All user-visible strings in `frontend/` and model recommendations in `src/simulation/` must use the canonical replacements above.
+- When referring to the 68-team NCAA field as a whole, use "The Tournament Field." When referring to a group of friends or contest entrants submitting brackets, use "bracket contest."

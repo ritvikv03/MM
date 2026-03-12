@@ -13,6 +13,7 @@ venv/
 # Artifacts & data (large files)
 artifacts/
 data/raw/
+data/cache/
 *.pkl
 *.h5
 *.pt

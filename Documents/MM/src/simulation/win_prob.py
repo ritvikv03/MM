@@ -343,8 +343,8 @@ def compute_blended_win_prob(
     # Model recommendation
     if abs(ctx.p_blended - 0.5) < 0.05:
         ctx.model_recommendation = (
-            f"COIN FLIP — Pick based on pool strategy. "
-            f"In large pools, take {a.name if a.seed > b.seed else b.name} for leverage."
+            f"COIN FLIP — Pick based on bracket strategy. "
+            f"In large bracket contests, take {a.name if a.seed > b.seed else b.name} for leverage."
         )
     elif ctx.p_blended > 0.65:
         ctx.model_recommendation = f"STRONG LEAN: {a.name} ({ctx.p_blended*100:.0f}%)"
