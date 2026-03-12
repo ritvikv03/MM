@@ -1,0 +1,28 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Artifacts & data (large files)
+artifacts/
+data/raw/
+*.pkl
+*.h5
+*.pt
+*.ckpt
+
+# Notebooks checkpoints
+.ipynb_checkpoints/
+
+# W&B
+wandb/
+
+# OS
+.DS_Store
