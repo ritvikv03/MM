@@ -2,7 +2,7 @@
 src/api/graph_builder.py
 
 Builds a real GraphResponse from Barttorvik T-Rank data via the DataLoader
-cache.  Replaces the synthetic stub when USE_REAL_DATA=true is set.
+cache.
 
 Algorithm
 ---------

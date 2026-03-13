@@ -2,8 +2,6 @@
 src/api/bracket_runner.py
 Real Monte Carlo bracket simulation using Barttorvik efficiency margins.
 
-Replaces the deterministic stub in server.py when USE_REAL_DATA=1.
-
 Public API
 ----------
 build_real_simulation(teams, n_simulations, season, loader) -> SimulateResponse

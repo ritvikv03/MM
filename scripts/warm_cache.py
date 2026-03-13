@@ -132,7 +132,7 @@ def main() -> None:
     if n_trank_ok == len(results):
         print("All T-Rank data cached. Run the stack:")
         print()
-        print("  USE_REAL_DATA=true uvicorn src.api.server:app --port 8000 --reload")
+        print("  uvicorn src.api.server:app --port 8000 --reload")
         print("  cd frontend && npm run dev")
         print()
         print("Then open http://localhost:3000 — cycle seasons in the sidebar to")
@@ -140,7 +140,7 @@ def main() -> None:
     else:
         failed = [r["season"] for r in results if r["trank"].startswith("WARN")]
         print(f"Some seasons failed: {failed}")
-        print("Stub data will be served as fallback for failed seasons.")
+        print("Endpoints for failed seasons will return HTTP 503 until data is available.")
 
 
 if __name__ == "__main__":
