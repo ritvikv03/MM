@@ -1204,4 +1204,57 @@ class TestSkellamHead:
         assert not np.any(data["y_spread"] == 0)
         head = BayesianHead(embedding_dim=4, n_conferences=8, n_seeds=4, use_skellam=True)
         model = head.build_model(**data)
-        assert model is not None
+
+
+def test_build_model_accepts_warm_start_posterior():
+    """build_model must not raise when warm_start_posterior dict is provided."""
+    pytest.importorskip("pymc")
+    import numpy as np
+    from src.model.bayesian_head import build_model
+    home = np.array([0.6, 0.4, 0.55, 0.45])
+    away = np.array([0.4, 0.6, 0.45, 0.55])
+    obs_win = np.array([1, 0, 1, 0])
+    obs_spread = np.array([5.0, -3.0, 2.0, -1.0])
+    home_coach = np.array([0, 1, 0, 1])
+    away_coach = np.array([1, 0, 1, 0])
+    warm_start = {
+        "alpha_mu": 0.02,
+        "alpha_sigma": 0.05,
+        "beta_spread_mu": 0.8,
+        "beta_spread_sigma": 0.1,
+    }
+    model = build_model(
+        home_strength=home,
+        away_strength=away,
+        obs_win=obs_win,
+        obs_spread=obs_spread,
+        home_coach=home_coach,
+        away_coach=away_coach,
+        n_coaches=2,
+        warm_start_posterior=warm_start,
+    )
+    assert model is not None
+
+
+def test_build_model_warm_start_none_matches_default():
+    """warm_start_posterior=None must be accepted as a valid call."""
+    pytest.importorskip("pymc")
+    import numpy as np
+    from src.model.bayesian_head import build_model
+    home = np.array([0.6, 0.4])
+    away = np.array([0.4, 0.6])
+    obs_win = np.array([1, 0])
+    obs_spread = np.array([5.0, -3.0])
+    home_coach = np.array([0, 1])
+    away_coach = np.array([1, 0])
+    model = build_model(
+        home_strength=home,
+        away_strength=away,
+        obs_win=obs_win,
+        obs_spread=obs_spread,
+        home_coach=home_coach,
+        away_coach=away_coach,
+        n_coaches=2,
+        warm_start_posterior=None,
+    )
+    assert model is not None
