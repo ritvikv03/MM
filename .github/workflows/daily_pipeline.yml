@@ -1,0 +1,80 @@
+name: Madness Matrix — Daily Pipeline
+
+on:
+  schedule:
+    - cron: '0 11 * * *'   # 6 AM ET  — full run: scrape + train + predict
+    - cron: '0 17 * * *'   # 12 PM ET — intel refresh + warm-start update
+    - cron: '0 3 * * *'    # 10 PM ET — ingest results + Brier recalibration
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'Run profile (full / intel / results)'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - intel
+          - results
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Determine run profile
+        id: profile
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_PROFILE: ${{ github.event.inputs.profile }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "profile=$INPUT_PROFILE" >> "$GITHUB_OUTPUT"
+          else
+            HOUR=$(date -u +%H)
+            if [ "$HOUR" = "11" ]; then
+              echo "profile=full" >> "$GITHUB_OUTPUT"
+            elif [ "$HOUR" = "17" ]; then
+              echo "profile=intel" >> "$GITHUB_OUTPUT"
+            else
+              echo "profile=results" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Run pipeline
+        env:
+          SUPABASE_URL:          ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY:  ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SUPABASE_ANON_KEY:     ${{ secrets.SUPABASE_ANON_KEY }}
+          KAGGLE_USERNAME:       ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY:            ${{ secrets.KAGGLE_KEY }}
+          WANDB_API_KEY:         ${{ secrets.WANDB_API_KEY }}
+          WANDB_PROJECT:         ${{ secrets.WANDB_PROJECT }}
+          WANDB_ENTITY:          ${{ secrets.WANDB_ENTITY }}
+          RUN_PROFILE:           ${{ steps.profile.outputs.profile }}
+        run: |
+          python - <<'PYEOF'
+          from src.pipeline.github_actions_runner import PipelineRunner, RunProfile
+          import os
+          profile_str = os.environ["RUN_PROFILE"]
+          profile_map = {
+              "full":    RunProfile.FULL,
+              "intel":   RunProfile.INTEL,
+              "results": RunProfile.RESULTS,
+          }
+          runner = PipelineRunner(season=2026)
+          result = runner.run(profile_map[profile_str])
+          print(f"Pipeline complete: {result}")
+          if result.get("status") == "failed":
+              raise SystemExit(1)
+          PYEOF
