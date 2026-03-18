@@ -109,12 +109,54 @@ class PipelineRunner:
         now = datetime.datetime.utcnow().isoformat()
         for row in team_rows:
             row["season"]     = self.season
+            row["adj_em"]     = round(row.get("adj_oe", 0) - row.get("adj_de", 0), 2)
             row["scraped_at"] = now
         self._writer.upsert_teams(team_rows)
 
+        # 4. Run Monte Carlo bracket simulation and write to Supabase
+        predictions_computed = 0
+        try:
+            from src.api.data_cache import DataLoader
+            from src.api.bracket_runner import build_real_simulation
+            from src.api.bracket_2026 import get_bracket_teams_ordered
+            loader = DataLoader()
+            teams_ordered = get_bracket_teams_ordered()
+            sim = build_real_simulation(teams_ordered, 10_000, self.season, loader=loader)
+            adv_probs: dict = {}
+            champ_prob: dict = {}
+            for t in sim.advancements:
+                adv_probs[t.team] = t.advancement_probs
+                champ_prob[t.team] = t.advancement_probs.get("Championship", 0.0)
+            champion = max(champ_prob, key=champ_prob.get) if champ_prob else None
+            self._writer.upsert_bracket_run({
+                "season":            self.season,
+                "run_date":          datetime.date.today().isoformat(),
+                "n_simulations":     sim.n_simulations,
+                "advancement_probs": adv_probs,
+                "champion_prob":     champ_prob,
+                "model_version":     "v2",
+                "runtime_secs":      0,
+            })
+            predictions_computed = len(sim.advancements)
+            logger.info("Bracket run written: champion=%s", champion)
+        except Exception as exc:
+            logger.warning("Bracket simulation skipped: %s", exc)
+
+        # 5. Run intel engine and write snapshot to Supabase
+        try:
+            from src.api.data_cache import DataLoader
+            from src.api.intel_engine import build_intel
+            from dataclasses import asdict
+            loader = DataLoader()
+            intel = build_intel(season=self.season, loader=loader)
+            self._writer.write_intel_snapshot(self.season, asdict(intel))
+            logger.info("Intel snapshot written: %d flags", len(intel.flags))
+        except Exception as exc:
+            logger.warning("Intel snapshot skipped: %s", exc)
+
         return {
             "teams_updated":        len(team_rows),
-            "predictions_computed": 0,
+            "predictions_computed": predictions_computed,
             "alerts_found":         0,
         }
 

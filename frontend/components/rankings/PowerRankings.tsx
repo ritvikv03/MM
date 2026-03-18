@@ -1,15 +1,19 @@
 'use client';
 import { useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { TOURNAMENT_TEAMS_2026 as MOCK_TEAMS, getConferenceName } from '@/lib/team-data';
+import { useTeams } from '@/lib/queries';
+import { TOURNAMENT_TEAMS_2026 as FALLBACK_TEAMS, getConferenceName } from '@/lib/team-data';
 import { BasketballCourt } from '@/components/ui/BasketballCourt';
 
 export function PowerRankings() {
+  const { teams: liveTeams, isLoading } = useTeams(2026);
+
   const ranked = useMemo(() => {
-    return [...MOCK_TEAMS]
-      .map((t) => ({ ...t, netRating: t.adj_oe - t.adj_de }))
-      .sort((a, b) => b.netRating - a.netRating);
-  }, []);
+    const source = liveTeams.length > 0
+      ? liveTeams.map(t => ({ ...t, netRating: (t.adj_oe ?? 0) - (t.adj_de ?? 0) }))
+      : FALLBACK_TEAMS.map(t => ({ ...t, netRating: t.adj_oe - t.adj_de }));
+    return source.sort((a, b) => b.netRating - a.netRating);
+  }, [liveTeams]);
 
   const maxOE = Math.max(...ranked.map(t => t.adj_oe));
   const minDE = Math.min(...ranked.map(t => t.adj_de));
@@ -32,7 +36,7 @@ export function PowerRankings() {
           POWER RANKINGS
         </h1>
         <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 'auto' }}>
-          ST-GNN Model • {ranked.length} Teams
+          {liveTeams.length > 0 ? 'Live T-Rank Data' : isLoading ? 'Loading…' : 'Cached Data'} • {ranked.length} Teams
         </span>
       </div>
 
@@ -86,7 +90,7 @@ export function PowerRankings() {
           </div>
 
           {/* Record */}
-          <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{team.record}</span>
+          <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{'record' in team ? team.record : '—'}</span>
 
           {/* Offensive Efficiency */}
           <div>

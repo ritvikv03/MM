@@ -1,25 +1,24 @@
 'use client';
 import { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { TOURNAMENT_TEAMS_2026 as MOCK_TEAMS } from '@/lib/team-data';
+import { useTeams } from '@/lib/queries';
+import { TOURNAMENT_TEAMS_2026 as FALLBACK_TEAMS } from '@/lib/team-data';
 
-// Helper: Pseudo-leverage score generator for the UI mockup
-// Green = High Value (> 1.2), Red = Toxic Chalk (< 0.8), Yellow = Fair (0.8 - 1.2)
-function getLeverageScore(seed: number, name: string): number {
-  // Hardcode some narratives to match the Python engine logic
-  if (name === 'Vanderbilt') return 0.65;  // Toxic chalk (collapsing defense)
-  if (name === 'Purdue') return 0.75;      // Over-owned due to luck
-  if (name === 'Vermont') return 1.45;     // Massive leverage upset
-  if (name === 'Liberty') return 1.35;     // Massive leverage upset
-  if (name === 'Yale') return 1.30;        // High leverage
-  if (name === 'TCU') return 1.25;         // Coin-flip leverage
-  
-  if (seed === 1) return 0.95 + Math.random() * 0.1;
-  if (seed >= 2 && seed <= 4) return 0.85 + Math.random() * 0.2;
-  if (seed >= 5 && seed <= 7) return 0.80 + Math.random() * 0.3;
-  if (seed >= 10 && seed <= 13) return 1.0 + Math.random() * 0.5; // Value zone
-  
-  return 0.9 + Math.random() * 0.2;
+// Typical public pick % by seed derived from ESPN/Yahoo bracket data.
+// Lower seeds attract far more public picks regardless of true probability.
+const SEED_PUBLIC_PCT: Record<number, number> = {
+  1: 0.72, 2: 0.58, 3: 0.48, 4: 0.40, 5: 0.35, 6: 0.30,
+  7: 0.25, 8: 0.20, 9: 0.18, 10: 0.15, 11: 0.12, 12: 0.10,
+  13: 0.06, 14: 0.04, 15: 0.02, 16: 0.01,
+};
+
+// Deterministic leverage from T-Rank data — no random, no hardcoding.
+// True win prob proxy = sigmoid(adj_em / 8); public ownership from seed lookup.
+function getLeverageScore(adjEm: number, luck: number, seed: number): number {
+  const em = adjEm - luck * 2.5; // luck-adjusted EM
+  const trueWinProb = 1 / (1 + Math.exp(-em / 8));
+  const publicPct = SEED_PUBLIC_PCT[seed] ?? 0.15;
+  return Math.round((trueWinProb / publicPct) * 100) / 100;
 }
 
 function getColorForLeverage(score: number): string {
@@ -30,13 +29,25 @@ function getColorForLeverage(score: number): string {
 
 export function WarRoomMatrix() {
   const [filter, setFilter] = useState<'all' | 'value' | 'toxic'>('all');
+  const { teams: liveTeams, isLoading } = useTeams(2026);
 
   const teamsWithLeverage = useMemo(() => {
-    return MOCK_TEAMS.map(team => {
-      const lev = getLeverageScore(team.seed, team.name);
-      return { ...team, leverage: lev };
-    }).sort((a, b) => b.leverage - a.leverage);
-  }, []);
+    const source = liveTeams.length > 0
+      ? liveTeams.map(t => ({
+          name: t.name, seed: t.seed, region: t.region ?? '',
+          adj_oe: t.adj_oe, adj_de: t.adj_de, adj_em: t.adj_em ?? (t.adj_oe - t.adj_de),
+          luck: t.luck ?? 0, playStyle: '',
+        }))
+      : FALLBACK_TEAMS.map(t => ({
+          name: t.name, seed: t.seed, region: t.region ?? '',
+          adj_oe: t.adj_oe, adj_de: t.adj_de, adj_em: t.adj_oe - t.adj_de,
+          luck: t.luck, playStyle: t.playStyle ?? '',
+        }));
+    return source.map(team => ({
+      ...team,
+      leverage: getLeverageScore(team.adj_em, team.luck, team.seed),
+    })).sort((a, b) => b.leverage - a.leverage);
+  }, [liveTeams]);
 
   const filteredTeams = useMemo(() => {
     if (filter === 'value') return teamsWithLeverage.filter(t => t.leverage >= 1.2);
@@ -55,6 +66,9 @@ export function WarRoomMatrix() {
           <h1 style={{ fontFamily: 'var(--font-space-grotesk)', color: '#2ecc71', fontWeight: 700, fontSize: '20px', letterSpacing: '0.05em' }}>
             WAR ROOM MATRIX
           </h1>
+          <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: '8px' }}>
+            {liveTeams.length > 0 ? 'Live T-Rank' : isLoading ? 'Loading…' : 'Cached'}
+          </span>
         </div>
         
         <div className="flex gap-2">
@@ -117,7 +131,7 @@ export function WarRoomMatrix() {
             <div className="mt-2 pt-2" style={{ borderTop: '1px solid rgba(255,255,255,0.05)', display: 'flex', justifyContent: 'space-between' }}>
               <div className="flex flex-col text-center">
                 <span style={{ fontSize: '8px', color: 'var(--text-muted)' }}>ADJ EM</span>
-                <span style={{ fontSize: '11px', color: '#d4a843', fontWeight: 600 }}>+{(team.adj_oe - team.adj_de).toFixed(1)}</span>
+                <span style={{ fontSize: '11px', color: '#d4a843', fontWeight: 600 }}>+{team.adj_em.toFixed(1)}</span>
               </div>
               <div className="flex flex-col text-center">
                 <span style={{ fontSize: '8px', color: 'var(--text-muted)' }}>LUCK</span>

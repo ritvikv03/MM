@@ -2,7 +2,8 @@
 import { useState, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { TOURNAMENT_TEAMS_2026 as MOCK_TEAMS, getConferenceName } from '@/lib/team-data';
-import { simulateBracket, fetchOptimalBracket } from '@/lib/api';
+import { simulateBracket } from '@/lib/api';
+import { useBracketOptimal } from '@/lib/queries';
 import { BracketHeatmap } from './BracketHeatmap';
 import type { TeamData as MockTeam } from '@/lib/team-data';
 import type { SimulateResponse } from '@/lib/api-types';
@@ -690,6 +691,7 @@ export function FullBracket() {
   const [simLoading, setSimLoading] = useState(false);
   const [simError, setSimError] = useState<string | null>(null);
   const [optimalLoading, setOptimalLoading] = useState(false);
+  const { bracketRun } = useBracketOptimal(2026);
 
   // Pre-sort teams by region using seed order
   const bracketByRegion = useMemo(() => {
@@ -766,13 +768,16 @@ export function FullBracket() {
     setOptimalLoading(true);
     setSimError(null);
     try {
-      const optimal = await fetchOptimalBracket();
-      // Build a champ-probability map for auto-filling picks
+      // Use pre-computed Supabase bracket run (from 6 AM pipeline) — no API call needed
+      const optimal = bracketRun;
+      if (!optimal || optimal.advancements.length === 0) {
+        setSimError('No pre-computed bracket found — pipeline runs at 6 AM ET.');
+        return;
+      }
       const champMap: Record<string, number> = {};
       for (const t of optimal.advancements) {
         champMap[t.team] = t.champ_probability;
       }
-      // Auto-fill every game: pick the team with higher championship probability
       const newPicks = new Map<string, MockTeam>();
       const allGames = computeBracket(bracketByRegion, new Map(), factors, wpaMap);
       for (const game of allGames) {
@@ -784,25 +789,22 @@ export function FullBracket() {
         }
       }
       setUserPicks(newPicks);
-      // Store sim data for heatmap if available
-      if (optimal.advancements.length > 0) {
-        setSimData({
-          n_simulations: optimal.n_simulations,
-          advancements: optimal.advancements.map(t => ({
-            team: t.team,
-            advancement_probs: t.advancement_probs,
-            entropy: t.entropy,
-          })),
-          data_source: optimal.data_source as 'real' | 'stub',
-        });
-      }
+      setSimData({
+        n_simulations: optimal.n_simulations,
+        advancements: optimal.advancements.map(t => ({
+          team: t.team,
+          advancement_probs: t.advancement_probs,
+          entropy: t.entropy,
+        })),
+        data_source: 'real',
+      });
     } catch (err) {
-      setSimError('Optimal bracket unavailable — using local model instead.');
-      console.error('[BracketSimulator] fetchOptimalBracket error:', err);
+      setSimError('Optimal bracket unavailable — pipeline may not have run yet.');
+      console.error('[BracketSimulator] handleOptimalBracket error:', err);
     } finally {
       setOptimalLoading(false);
     }
-  }, [bracketByRegion, factors, wpaMap]);
+  }, [bracketRun, bracketByRegion, factors, wpaMap]);
 
   const f4_0 = games.find(g => g.id === 'F4-0')!;
   const f4_1 = games.find(g => g.id === 'F4-1')!;

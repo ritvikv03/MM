@@ -45,6 +45,13 @@ class SupabaseWriter:
         """Insert a bracket run record (no conflict key — always a new run)."""
         self._client.table("bracket_runs").insert(row).execute()
 
+    def write_intel_snapshot(self, season: int, intel_dict: dict[str, Any]) -> None:
+        """Insert a full IntelResponse snapshot for the frontend to read."""
+        self._client.table("intel_snapshots").insert({
+            "season": season,
+            "snapshot": intel_dict,
+        }).execute()
+
     def insert_intel_alert(self, alert: dict[str, Any]) -> None:
         """Upsert an intel alert, deduplicating by alert_id."""
         self._client.table("intel_alerts").upsert(alert, on_conflict="alert_id").execute()

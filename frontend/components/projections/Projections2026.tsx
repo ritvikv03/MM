@@ -2,7 +2,7 @@
 import { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { TOURNAMENT_TEAMS_2026 as MOCK_TEAMS, generate2026Predictions as generate2026Brackets, getConferenceName } from '@/lib/team-data';
-import { useIntel } from '@/lib/hooks/use-live-data';
+import { useIntelSnapshot } from '@/lib/queries';
 
 const REGIONS = ['East', 'South', 'West', 'Midwest'];
 
@@ -12,7 +12,7 @@ export function Projections2026() {
   const [activeVariant, setActiveVariant] = useState(0);
   const [activeRegion, setActiveRegion] = useState<string | null>(null);
   const variant = brackets[activeVariant];
-  const { data: intel, isLoading: intelLoading, error: intelError } = useIntel(2026);
+  const { intel, isLoading: intelLoading, error: intelError } = useIntelSnapshot(2026);
 
   const regionTeams = useMemo(() => {
     const map: Record<string, any[]> = {};
