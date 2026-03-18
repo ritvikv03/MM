@@ -1,7 +1,8 @@
 'use client';
 import { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { MOCK_TEAMS, generate2026Brackets, getConferenceName } from '@/lib/mock-data';
+import { TOURNAMENT_TEAMS_2026 as MOCK_TEAMS, generate2026Predictions as generate2026Brackets, getConferenceName } from '@/lib/team-data';
+import { useIntel } from '@/lib/hooks/use-live-data';
 
 const REGIONS = ['East', 'South', 'West', 'Midwest'];
 
@@ -11,6 +12,7 @@ export function Projections2026() {
   const [activeVariant, setActiveVariant] = useState(0);
   const [activeRegion, setActiveRegion] = useState<string | null>(null);
   const variant = brackets[activeVariant];
+  const { data: intel, isLoading: intelLoading, error: intelError } = useIntel(2026);
 
   const regionTeams = useMemo(() => {
     const map: Record<string, any[]> = {};
@@ -76,57 +78,78 @@ export function Projections2026() {
         {activeTab === 'analysis' && (
           <motion.div key="analysis" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-6">
             
-            {/* Intel Flags */}
+            {/* Intel Flags — live from /api/intel */}
             <div className="glass-wood p-5 border-l-4 border-l-[#d4a843] relative overflow-hidden">
                <div className="absolute top-0 right-0 p-4 opacity-10">
                  <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="#d4a843" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
                </div>
-               <h2 className="text-sm text-[#d4a843] font-bold tracking-widest mb-4">AUTONOMOUS INTEL FLAGS</h2>
-               <div className="space-y-3">
-                 <div className="flex gap-3 text-sm">
-                   <div className="text-red-500 font-bold mt-0.5">🚨</div>
-                   <div><strong className="text-red-400">Cooper Flagg is NOT on Duke's roster.</strong> He entered the 2025 NBA Draft. Evaluate Duke's 2025-26 roster structure carefully before simulating deep runs.</div>
-                 </div>
-                 <div className="flex gap-3 text-sm">
-                   <div className="text-red-500 font-bold mt-0.5">📉</div>
-                   <div><strong className="text-orange-400">Iowa State Offensive Crash:</strong> AdjOE dropped to 82nd nationally over last 7 games. Elite defense (13th) but highly vulnerable to variance against 14-seeds.</div>
-                 </div>
-                 <div className="flex gap-3 text-sm">
-                   <div className="text-red-500 font-bold mt-0.5">⚠️</div>
-                   <div><strong className="text-orange-400">Vanderbilt Defensive Collapse:</strong> AdjDE fell from 28th → 118th since February. Single largest regression in the field. Prime upset target.</div>
-                 </div>
-                 <div className="flex gap-3 text-sm">
-                   <div className="text-green-500 font-bold mt-0.5">📈</div>
-                   <div><strong className="text-green-400">UConn Surging:</strong> Top 5 nationally in AdjDE during current win streak, 11th in AdjOE. Extremely dangerous 2-seed profile.</div>
-                 </div>
+               <div className="flex items-center justify-between mb-4">
+                 <h2 className="text-sm text-[#d4a843] font-bold tracking-widest">AUTONOMOUS INTEL FLAGS</h2>
+                 {intel && <span className="text-[9px] text-zinc-500">SEASON: {intel.season}</span>}
                </div>
+               {intelLoading && (
+                 <div className="flex items-center gap-2 text-zinc-500 text-xs py-2">
+                   <div className="w-2 h-2 rounded-full bg-[#d4a843] animate-pulse" />
+                   Loading live intel from Barttorvik T-Rank…
+                 </div>
+               )}
+               {intelError && (
+                 <div className="text-xs text-red-400 py-2">
+                   Backend offline — retry after 6 AM ET pipeline run.
+                 </div>
+               )}
+               {intel && (
+                 <div className="space-y-3">
+                   {intel.flags.slice(0, 5).map((flag, i) => (
+                     <div key={i} className="flex gap-3 text-sm">
+                       <div className="font-bold mt-0.5 flex-shrink-0">{flag.emoji}</div>
+                       <div>
+                         <strong className={
+                           flag.severity === 'EXTREME' ? 'text-red-400' :
+                           flag.severity === 'HIGH'    ? 'text-orange-400' :
+                           flag.severity === 'MODERATE'? 'text-yellow-400' : 'text-green-400'
+                         }>{flag.headline}</strong>
+                         <span className="text-zinc-400 ml-1">— {flag.detail}</span>
+                       </div>
+                     </div>
+                   ))}
+                 </div>
+               )}
             </div>
 
-            {/* Market Inefficiencies */}
+            {/* False Favorites — live from /api/intel */}
             <div className="glass-panel p-5 border border-red-500/30">
               <h2 className="text-sm font-bold tracking-widest mb-4 text-red-500 flex items-center gap-2">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
                 FALSE FAVORITES & OVER-SEEDED RISKS
               </h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {[
-                  { t: 'Purdue', s: '5 (East)', r: 'HIGH', txt: 'Barttorvik luck +0.05. AdjDE regressed heavily in Feb (95.0 from 91.2). Close-game record unsustainable.' },
-                  { t: 'Vanderbilt', s: '4 (South)', r: 'EXTREME', txt: 'Defensive metrics collapsed. Offense-only profile in March is highly susceptible to early exit.' },
-                  { t: 'Oregon', s: '8 (West)', r: 'MODERATE', txt: 'Turnover rate 21.4% (bottom 30). Vulnerable against pressure defensive schemes.' },
-                  { t: 'Mississippi St', s: '8 (East)', r: 'MODERATE', txt: 'Offensive efficiency inflated by weak non-con schedule. Profiles closer to a 10-seed.' }
-                ].map(item => (
-                  <div key={item.t} className="bg-black/40 p-3 rounded border border-white/5">
+                {(intel?.false_favorites ?? []).map(item => (
+                  <div key={item.team} className="bg-black/40 p-3 rounded border border-white/5">
                     <div className="flex justify-between items-start mb-2">
-                      <div className="font-bold text-zinc-200">{item.t} <span className="text-zinc-500 text-xs ml-1">#{item.s}</span></div>
-                      <div className={`text-[10px] px-2 py-0.5 rounded font-bold ${item.r === 'EXTREME' ? 'bg-red-500/20 text-red-400' : item.r === 'HIGH' ? 'bg-orange-500/20 text-orange-400' : 'bg-yellow-500/20 text-yellow-400'}`}>{item.r} RISK</div>
+                      <div className="font-bold text-zinc-200">{item.team} <span className="text-zinc-500 text-xs ml-1">{item.seed_label}</span></div>
+                      <div className={`text-[10px] px-2 py-0.5 rounded font-bold ${item.risk_level === 'EXTREME' ? 'bg-red-500/20 text-red-400' : item.risk_level === 'HIGH' ? 'bg-orange-500/20 text-orange-400' : 'bg-yellow-500/20 text-yellow-400'}`}>
+                        {item.risk_level} RISK
+                      </div>
                     </div>
-                    <div className="text-xs text-zinc-400 leading-relaxed">{item.txt}</div>
+                    <div className="text-xs text-zinc-400 leading-relaxed">{item.detail}</div>
+                    <div className="flex gap-3 mt-2 text-[10px] text-zinc-500">
+                      <span>AdjEM: +{item.em}</span>
+                      <span>Luck: +{item.luck.toFixed(3)}</span>
+                      <span>AdjDE: {item.adj_de}</span>
+                    </div>
                   </div>
                 ))}
+                {intelLoading && (
+                  <div className="col-span-2 text-center text-zinc-500 text-xs py-4">Loading false favorites analysis…</div>
+                )}
+                {!intelLoading && !intel && (
+                  <div className="col-span-2 text-center text-zinc-500 text-xs py-4">Backend offline — data available after 6 AM ET pipeline run.</div>
+                )}
               </div>
             </div>
 
-            {/* Cinderella Watchlist */}
+            {/* Cinderella Watchlist — live from /api/intel */}
             <div className="glass-wood p-5 border border-green-500/30">
               <h2 className="text-sm font-bold tracking-widest mb-4 text-green-400 flex items-center gap-2">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 8l4 4-4 4M8 12h8"/></svg>
@@ -137,24 +160,23 @@ export function Projections2026() {
                   <thead>
                     <tr className="border-b border-white/10 text-[10px] text-zinc-500 tracking-wider">
                       <th className="p-2 pb-3">TEAM</th>
-                      <th className="p-2 pb-3">TARGET VICTIM</th>
-                      <th className="p-2 pb-3 text-center">UPSET %</th>
+                      <th className="p-2 pb-3">OPPONENT</th>
+                      <th className="p-2 pb-3 text-center">UPSET EDGE %</th>
                       <th className="p-2 pb-3">WHY THEY'RE DANGEROUS</th>
                     </tr>
                   </thead>
                   <tbody className="text-xs">
-                    {[
-                      { t: 'Yale', s: 13, v: '(4) Vanderbilt', p: '43%', txt: 'Elite half-court offense, low tempo creates variance. Elite eFG%.' },
-                      { t: 'Liberty', s: 12, v: '(5) Purdue / Marquette', p: '38%', txt: 'Top-25 2PT% and 3PT%. Deep rotation, high assist rate.' },
-                      { t: 'Miami (OH)', s: 11, v: '(5/6) Any', p: '35%', txt: 'Undefeated in MAC. #1 eFG% nationally. Zero public ownership.' },
-                      { t: 'VCU', s: 11, v: '(6) Any', p: '33%', txt: 'Havoc defense generates 18+ TOVs. Extreme momentum.' },
-                      { t: 'High Point', s: 14, v: '(3) Iowa St / Nebraska', p: '28%', txt: 'Nation\'s #1 steal rate. 90+ PPG average creates chaos potential.' }
-                    ].map((row, i) => (
-                      <tr key={row.t} className={`border-b border-white/5 ${i % 2 === 0 ? 'bg-white/[0.02]' : ''}`}>
-                        <td className="p-3 font-bold text-zinc-200"><span className="text-zinc-500 mr-2 text-[10px]">{row.s}</span>{row.t}</td>
-                        <td className="p-3 text-zinc-400">{row.v}</td>
-                        <td className="p-3 text-center font-bold text-green-400">{row.p}</td>
-                        <td className="p-3 text-zinc-400 max-w-[200px]">{row.txt}</td>
+                    {intelLoading && (
+                      <tr><td colSpan={4} className="text-center text-zinc-500 py-4">Loading upset analysis…</td></tr>
+                    )}
+                    {(intel?.cinderellas ?? []).map((row, i) => (
+                      <tr key={row.team} className={`border-b border-white/5 ${i % 2 === 0 ? 'bg-white/[0.02]' : ''}`}>
+                        <td className="p-3 font-bold text-zinc-200">
+                          <span className="text-zinc-500 mr-2 text-[10px]">{row.seed}</span>{row.team}
+                        </td>
+                        <td className="p-3 text-zinc-400">({row.opponent_seed}) {row.opponent}</td>
+                        <td className="p-3 text-center font-bold text-green-400">{row.upset_pct}%</td>
+                        <td className="p-3 text-zinc-400 max-w-[200px]">{row.edge_summary}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -162,69 +184,76 @@ export function Projections2026() {
               </div>
             </div>
 
-            {/* Matchup Interrogator Deep Dives */}
+            {/* Matchup Deep Dives — live from /api/intel */}
             <div className="glass-panel p-5 border border-[#ff6b35]/20">
                <h2 className="text-sm text-[#ff6b35] font-bold tracking-widest mb-4">MATCHUP INTERROGATOR DEEP DIVES</h2>
                <div className="space-y-4">
-                 
-                 <div className="bg-[#1a1208] p-4 rounded-lg border border-white/5">
-                   <div className="flex justify-between items-center mb-3">
-                     <div className="font-bold text-sm tracking-wide">
-                       <span className="text-zinc-500 mr-2">4</span>VIRGINIA <span className="text-zinc-500 mx-2">vs</span> <span className="text-zinc-500 mr-2">13</span>YALE
+                 {intelLoading && (
+                   <div className="text-zinc-500 text-xs text-center py-4">Computing matchup deep dives…</div>
+                 )}
+                 {(intel?.deep_dives ?? []).slice(0, 4).map((dive, i) => (
+                   <div key={i} className="bg-[#1a1208] p-4 rounded-lg border border-white/5">
+                     <div className="flex justify-between items-center mb-3">
+                       <div className="font-bold text-sm tracking-wide">
+                         <span className="text-zinc-500 mr-2">{dive.seed_a}</span>{dive.team_a.toUpperCase()}
+                         <span className="text-zinc-500 mx-2">vs</span>
+                         <span className="text-zinc-500 mr-2">{dive.seed_b}</span>{dive.team_b.toUpperCase()}
+                       </div>
+                       <div className="flex gap-1 items-center">
+                         {dive.tempo_clash && (
+                           <span className="text-[9px] px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded font-bold">⚡ TEMPO</span>
+                         )}
+                         <div className="text-xs font-bold px-2 py-1 bg-zinc-800 rounded text-zinc-300">
+                           {dive.team_a.split(' ').pop()} {(dive.p_win_a * 100).toFixed(0)}% • {dive.team_b.split(' ').pop()} {((1 - dive.p_win_a) * 100).toFixed(0)}%
+                         </div>
+                       </div>
                      </div>
-                     <div className="text-xs font-bold px-2 py-1 bg-zinc-800 rounded text-zinc-300">UVA 57% • YALE 43%</div>
-                   </div>
-                   <p className="text-xs text-zinc-400 mb-3">
-                     <strong className="text-orange-400">Tempo Clash Inverted:</strong> Both teams play at a glacial pace (~61 possessions). At 55 total possessions, every made 3-pointer swings win probability by 5.5%. Yale's elite eFG% (0.55) and ball security are perfectly built for this low-possession environment. 
-                   </p>
-                   <div className="text-[10px] uppercase text-[#ff6b35] font-bold tracking-widest bg-[#ff6b35]/10 inline-block px-2 py-1 rounded">oracle recommendation: YALE FOR LEVERAGE IN 1000+ ENTRY POOLS</div>
-                 </div>
-
-                 <div className="bg-[#1a1208] p-4 rounded-lg border border-white/5">
-                   <div className="flex justify-between items-center mb-3">
-                     <div className="font-bold text-sm tracking-wide">
-                       <span className="text-zinc-500 mr-2">5</span>PURDUE <span className="text-zinc-500 mx-2">vs</span> <span className="text-zinc-500 mr-2">12</span>LIBERTY
+                     <p className="text-xs text-zinc-400 mb-3">{dive.narrative}</p>
+                     <div className="text-[10px] uppercase text-[#ff6b35] font-bold tracking-widest bg-[#ff6b35]/10 inline-block px-2 py-1 rounded">
+                       {dive.recommendation}
                      </div>
-                     <div className="text-xs font-bold px-2 py-1 bg-zinc-800 rounded text-zinc-300">PUR 62% • LIB 38%</div>
                    </div>
-                   <p className="text-xs text-zinc-400 mb-3">
-                     Purdue's unsustainably good close-game luck (+0.05) masks defensive regression. Liberty attacks the rim (high FTA rate) and plays elite defense (91.8 AdjDE). This is a prime 12-over-5 upset candidate based on underlying metrics completely decoupled from public perception.
-                   </p>
-                   <div className="text-[10px] uppercase text-[#ff6b35] font-bold tracking-widest bg-[#ff6b35]/10 inline-block px-2 py-1 rounded">oracle recommendation: LIBERTY IS HIGHEST-LEVERAGE PLAY IN EAST</div>
-                 </div>
-
+                 ))}
                </div>
             </div>
 
-            {/* Optimal Bracket Strategy */}
+            {/* Optimal Bracket Strategy — live from /api/intel */}
             <div className="glass-wood p-5 border-t-2 border-[#ff6b35]">
-               <h2 className="text-sm font-bold tracking-widest mb-4">MEGA-POOL OPTIMAL PATH (10,000+ ENTRIES)</h2>
-               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs text-zinc-300">
-                 <div className="bg-black/30 p-3 rounded">
-                   <div className="text-[10px] text-zinc-500 tracking-widest mb-2 font-bold">R64 DIFFERENTIATORS</div>
-                   <ul className="list-disc pl-4 space-y-1 text-green-400">
-                     <li>(12) Liberty over (5) Purdue</li>
-                     <li>(13) Yale over (4) Virginia</li>
-                     <li>(13) Vermont over (4) Vanderbilt</li>
-                     <li>(9) TCU over (8) Miss. State</li>
-                   </ul>
-                 </div>
-                 <div className="bg-black/30 p-3 rounded">
-                   <div className="text-[10px] text-zinc-500 tracking-widest mb-2 font-bold">DEEP RUN VALUE</div>
-                   <ul className="list-disc pl-4 space-y-1">
-                     <li>Michigan St clears Illinois path</li>
-                     <li>Houston reaches Elite 8</li>
-                     <li>Florida outlasts South chaos</li>
-                   </ul>
-                 </div>
-                 <div className="bg-black/30 p-3 rounded">
-                   <div className="text-[10px] text-zinc-500 tracking-widest mb-2 font-bold">CHAMPIONSHIP EDGE</div>
-                   <div className="text-center mt-2">
-                     <div className="text-[#d4a843] font-bold mb-1">Duke 54% vs Michigan 46%</div>
-                     <div className="text-[10px] text-zinc-500 leading-tight">Pick Duke in small bracket contests (&lt;1000 entries).<br/>Pick Michigan in mega-contests for Upset Edge advantage.</div>
+               <h2 className="text-sm font-bold tracking-widest mb-4">BRACKET PORTFOLIO STRATEGY (MEGA-CONTEST OPTIMAL)</h2>
+               {intelLoading && <div className="text-zinc-500 text-xs">Computing optimal path…</div>}
+               {intel?.optimal_path && (
+                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs text-zinc-300">
+                   <div className="bg-black/30 p-3 rounded">
+                     <div className="text-[10px] text-zinc-500 tracking-widest mb-2 font-bold">R64 DIFFERENTIATORS</div>
+                     <ul className="list-disc pl-4 space-y-1 text-green-400">
+                       {intel.optimal_path.r64_differentiators.slice(0, 5).map((pick, i) => (
+                         <li key={i}>({pick.winner_seed}) {pick.winner} over ({pick.loser_seed}) {pick.loser} — {pick.upset_pct}%</li>
+                       ))}
+                     </ul>
+                   </div>
+                   <div className="bg-black/30 p-3 rounded">
+                     <div className="text-[10px] text-zinc-500 tracking-widest mb-2 font-bold">DEEP RUN VALUE</div>
+                     <ul className="list-disc pl-4 space-y-1">
+                       {intel.optimal_path.deep_run_value.map((t, i) => (
+                         <li key={i}>({t.seed}) {t.team} — AdjEM +{t.em}</li>
+                       ))}
+                     </ul>
+                   </div>
+                   <div className="bg-black/30 p-3 rounded">
+                     <div className="text-[10px] text-zinc-500 tracking-widest mb-2 font-bold">CHAMPIONSHIP EDGE</div>
+                     {intel.optimal_path.championship_edge ? (
+                       <div className="text-center mt-2">
+                         <div className="text-[#d4a843] font-bold mb-1">
+                           {intel.optimal_path.championship_edge.team_a} {intel.optimal_path.championship_edge.p_a}% vs {intel.optimal_path.championship_edge.team_b} {intel.optimal_path.championship_edge.p_b}%
+                         </div>
+                         <div className="text-[10px] text-zinc-500 leading-tight">{intel.optimal_path.championship_edge.note}</div>
+                       </div>
+                     ) : (
+                       <div className="text-zinc-500 text-center text-xs mt-2">Computing…</div>
+                     )}
                    </div>
                  </div>
-               </div>
+               )}
             </div>
 
           </motion.div>

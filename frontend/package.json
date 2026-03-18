@@ -11,15 +11,12 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@react-three/drei": "^9.105.6",
-    "@react-three/fiber": "^8.16.8",
-    "@react-three/postprocessing": "^2.16.2",
     "d3": "^7.9.0",
     "framer-motion": "^11.2.0",
     "next": "14.2.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "three": "^0.163.0",
+    "swr": "^2.4.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {
@@ -30,7 +27,6 @@
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
-    "@types/three": "^0.163.0",
     "@vitejs/plugin-react": "^4.3.0",
     "@vitest/coverage-v8": "^1.6.0",
     "autoprefixer": "^10.0.1",

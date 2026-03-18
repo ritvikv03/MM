@@ -1,7 +1,7 @@
 'use client';
 import { motion } from 'framer-motion';
 
-export type NavPage = 'rankings' | 'matchup' | 'bracket' | 'projections' | 'warroom' | 'graph';
+export type NavPage = 'rankings' | 'matchup' | 'bracket' | 'projections' | 'warroom';
 
 interface SidebarProps {
   activePage: NavPage;
@@ -67,28 +67,12 @@ function EyeIcon({ color }: { color: string }) {
   );
 }
 
-function GraphIcon({ color }: { color: string }) {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round">
-      <circle cx="5" cy="5" r="2" />
-      <circle cx="19" cy="5" r="2" />
-      <circle cx="12" cy="19" r="2" />
-      <circle cx="5" cy="12" r="1.5" />
-      <line x1="5" y1="7" x2="5" y2="10.5" />
-      <line x1="7" y1="5" x2="17" y2="5" />
-      <line x1="19" y1="7" x2="13.5" y2="17.5" />
-      <line x1="5" y1="13.5" x2="10.5" y2="17.5" />
-    </svg>
-  );
-}
-
 const NAV_ITEMS: { id: NavPage; label: string; Icon: React.FC<{ color: string }> }[] = [
   { id: 'rankings', label: 'Rankings', Icon: RankingsIcon },
   { id: 'matchup', label: 'Matchup', Icon: MatchupIcon },
   { id: 'bracket', label: 'Bracket', Icon: BracketIcon },
   { id: 'projections', label: '2026', Icon: TrophyIcon },
   { id: 'warroom', label: 'War Room', Icon: EyeIcon },
-  { id: 'graph', label: 'Graph', Icon: GraphIcon },
 ];
 
 export function Sidebar({ activePage, onNavigate, modelStatus, season, onSeasonChange }: SidebarProps) {

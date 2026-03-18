@@ -1,7 +1,7 @@
 'use client';
 import { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { MOCK_TEAMS } from '@/lib/mock-data';
+import { TOURNAMENT_TEAMS_2026 as MOCK_TEAMS } from '@/lib/team-data';
 
 // Helper: Pseudo-leverage score generator for the UI mockup
 // Green = High Value (> 1.2), Red = Toxic Chalk (< 0.8), Yellow = Fair (0.8 - 1.2)

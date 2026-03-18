@@ -1,7 +1,7 @@
 'use client';
 import { useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { MOCK_TEAMS, getConferenceName } from '@/lib/mock-data';
+import { TOURNAMENT_TEAMS_2026 as MOCK_TEAMS, getConferenceName } from '@/lib/team-data';
 import { BasketballCourt } from '@/components/ui/BasketballCourt';
 
 export function PowerRankings() {

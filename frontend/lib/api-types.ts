@@ -114,3 +114,100 @@ export type GraphResponse = z.infer<typeof GraphResponseSchema>;
 export type MatchupRequest = z.infer<typeof MatchupRequestSchema>;
 export type MatchupResponse = z.infer<typeof MatchupResponseSchema>;
 export type SimulateResponse = z.infer<typeof SimulateResponseSchema>;
+
+// ── Intel ─────────────────────────────────────────────────────────────────────
+
+export interface IntelFlag {
+  type: 'risk' | 'alert' | 'surge' | 'cinderella';
+  severity: 'EXTREME' | 'HIGH' | 'MODERATE' | 'LOW';
+  team: string;
+  seed: number;
+  region: string;
+  headline: string;
+  detail: string;
+  metric: string;
+  emoji: string;
+}
+
+export interface CinderellaEntry {
+  team: string;
+  seed: number;
+  region: string;
+  opponent: string;
+  opponent_seed: number;
+  upset_pct: number;
+  edge_summary: string;
+}
+
+export interface MatchupDeepDive {
+  team_a: string;
+  seed_a: number;
+  team_b: string;
+  seed_b: number;
+  region: string;
+  round: string;
+  p_win_a: number;
+  tempo_clash: boolean;
+  tempo_diff: number;
+  edge_team: string;
+  em_delta: number;
+  narrative: string;
+  recommendation: string;
+}
+
+export interface FalseFavorite {
+  team: string;
+  seed: number;
+  region: string;
+  seed_label: string;
+  risk_level: 'EXTREME' | 'HIGH' | 'MODERATE';
+  detail: string;
+  em: number;
+  luck: number;
+  adj_de: number;
+}
+
+export interface IntelResponse {
+  season: number;
+  flags: IntelFlag[];
+  false_favorites: FalseFavorite[];
+  cinderellas: CinderellaEntry[];
+  deep_dives: MatchupDeepDive[];
+  optimal_path: {
+    r64_differentiators: Array<{
+      winner: string;
+      loser: string;
+      winner_seed: number;
+      loser_seed: number;
+      region: string;
+      upset_pct: number;
+    }>;
+    deep_run_value: Array<{
+      team: string;
+      seed: number;
+      region: string;
+      em: number;
+      adj_oe: number;
+      adj_de: number;
+    }>;
+    championship_edge: {
+      team_a: string;
+      team_b: string;
+      p_a: number;
+      p_b: number;
+      note: string;
+    } | null;
+  };
+}
+
+export interface OptimalBracketResponse {
+  champion: string;
+  final_four: string[];
+  n_simulations: number;
+  advancements: Array<{
+    team: string;
+    advancement_probs: Record<string, number>;
+    entropy: number;
+  }>;
+  data_source: string;
+}

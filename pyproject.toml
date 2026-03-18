@@ -15,6 +15,13 @@ dynamic = ["dependencies"]
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[project.scripts]
+mm = "src.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.2",

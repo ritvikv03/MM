@@ -1,11 +1,11 @@
 # CLAUDE.md — Master System Prompt & Workflow Guide
-## NCAA March Madness ST-GNN + Bayesian CLV Model
+## Madness Matrix — Production-Deployed ST-GNN + Bayesian Bracket Prediction Engine
 
 ---
 
 ## 1. Primary Project Goal
 
-Build a novel predictive model to find **Closing Line Value (CLV)** and maximize **Brier Score** for NCAA March Madness.
+Build **Madness Matrix** — a production-deployed, autonomously-running NCAA March Madness prediction engine that finds **Closing Line Value (CLV)** and maximizes **Brier Score**. The system runs 3× daily via GitHub Actions, stores every prediction snapshot in Supabase for historical accuracy tracking, and surfaces descriptive, predictive, and prescriptive analytics in a deployed Next.js frontend. The current target bracket is **2026**.
 
 **Core Mandate:**
 - Move entirely away from point-estimate tabular classification (e.g., scikit-learn / XGBoost pipelines).
@@ -142,30 +142,56 @@ MM/
 ├── README.md
 ├── pyproject.toml / requirements.txt
 ├── .env                         # API keys (never committed)
+├── .env.example                 # Template listing all required keys
 ├── .gitignore
 │
+├── .github/
+│   └── workflows/
+│       ├── daily_pipeline.yml   # 3× daily cron: 6 AM / 12 PM / 10 PM ET
+│       └── pr_tests.yml         # CI: pytest + vitest on every PR
+│
 ├── src/
-│   ├── data/                    # All ingestion modules (one per source above)
+│   ├── data/                    # All ingestion modules (one per source)
 │   ├── graph/                   # PyG graph construction & temporal encoding
 │   │   ├── graph_constructor.py
 │   │   ├── node_features.py
 │   │   └── edge_features.py
-│   ├── model/                   # ST-GNN + Bayesian model definitions
+│   ├── model/                   # ST-GNN + Bayesian + calibration
 │   │   ├── gat_encoder.py
 │   │   ├── temporal_encoder.py
-│   │   └── bayesian_head.py
+│   │   ├── bayesian_head.py
+│   │   ├── calibration.py       # Isotonic regression calibration layer (NEW)
+│   │   └── ensemble.py
 │   ├── simulation/              # Monte Carlo bracket engine
 │   │   └── monte_carlo.py
 │   ├── betting/                 # Kelly Criterion sizing, CLV computation
 │   │   └── kelly.py
+│   ├── pipeline/                # GitHub Actions orchestration
+│   │   ├── github_actions_runner.py  # full / intel / results run profiles
+│   │   ├── supabase_writer.py        # writes all outputs to Supabase
+│   │   └── config.py
 │   └── utils/                   # Logging, config, shared helpers
 │
-├── tests/                       # pytest test suite mirroring src/
-│   ├── data/
-│   ├── graph/
-│   ├── model/
-│   └── simulation/
+├── supabase/
+│   └── migrations/
+│       └── 001_initial_schema.sql   # All 7 tables
 │
+├── frontend/                    # Next.js 15 (deployed on Vercel)
+│   ├── app/
+│   ├── components/
+│   │   ├── live/                # Live 2026 tab (Descriptive/Predictive/Prescriptive)
+│   │   ├── rankings/
+│   │   ├── matchup/
+│   │   ├── bracket/
+│   │   ├── warroom/
+│   │   ├── intel/               # Intel Feed (Supabase Realtime)
+│   │   └── nav/
+│   └── lib/
+│       ├── supabase.ts          # Supabase client singleton
+│       └── queries.ts           # React Query hooks
+│
+├── tests/                       # pytest test suite mirroring src/
+├── docs/plans/                  # Design docs and implementation plans
 ├── notebooks/                   # EDA and research scratchpads only
 └── artifacts/                   # W&B artifacts, saved models (gitignored)
 ```
@@ -203,11 +229,21 @@ MM/
 - No forward progress past a checkpoint without explicit user sign-off.
 
 ### 5.5 Secrets & API Key Management
-- Only two services require credentials: **Kaggle** and **Weights & Biases**.
-- All keys must live in `.env` only — never hardcoded in source files.
-- Load via `python-dotenv`. `.env` is gitignored; `.env.example` lists the two required keys.
-- Required: `KAGGLE_USERNAME`, `KAGGLE_KEY`, `WANDB_API_KEY`, `WANDB_PROJECT`, `WANDB_ENTITY`.
-- No other API keys are needed or permitted. All other data is scraped from free public pages.
+- All keys must live in `.env` only (local) and GitHub Actions Secrets / Vercel Environment Variables (deployed). Never hardcoded.
+- Load via `python-dotenv`. `.env` is gitignored; `.env.example` lists all required keys.
+- **Required keys:**
+  ```
+  KAGGLE_USERNAME           # Kaggle data downloads
+  KAGGLE_KEY
+  WANDB_API_KEY             # W&B experiment tracking
+  WANDB_PROJECT
+  WANDB_ENTITY
+  SUPABASE_URL              # Supabase project URL
+  SUPABASE_SERVICE_KEY      # Service role key (server/Actions only — never in frontend)
+  SUPABASE_ANON_KEY         # Anon key (safe for frontend/Vercel)
+  VERCEL_CRON_SECRET        # Shared secret for cron webhook authentication
+  ```
+- No other API keys are needed or permitted. All scraped data comes from free public pages.
 
 ### 5.6 W&B Logging Standards
 Every training run must log:
@@ -351,7 +387,7 @@ Advanced mathematical, economic, and ML theories integrated into the core engine
 
 ---
 
-*Last updated: 2026-03-12 — AlphaMarch upgrades (loss/fusion/sentiment/Skellam), §14 Madness Matrix terminology standards added.*
+*Last updated: 2026-03-12 — Full Madness Matrix overhaul: deployment architecture, no-synthetic-data mandate, 3× daily pipeline, §15–17 added.*
 
 ---
 
@@ -421,6 +457,101 @@ Advanced mathematical, economic, and ML theories integrated into the core engine
 - `probToHeatColor` must return `rgb(r,g,b)` (no spaces, no alpha channel) — vitest regex `^rgb\(\d+,\d+,\d+\)$` tests this.
 - R3F edge arrays: use content-based keys (`source-target`) not array index — index keys cause full re-mounts when graph data refreshes.
 - Frontend vitest: ~5s. Backend pytest: ~20s. Run `npx vitest run --reporter=dot` for fast iteration.
+
+---
+
+## 15. Deployment Architecture
+
+### Stack (all free, zero cost)
+| Layer | Service | Purpose |
+|---|---|---|
+| Pipeline | GitHub Actions (public repo) | 3× daily cron: 6 AM / 12 PM / 10 PM ET. Runs scrape + ML + Monte Carlo. Writes to Supabase. |
+| Database | Supabase (free project) | Postgres + Realtime. 7 tables. 500MB free tier. |
+| Frontend | Vercel (Hobby plan) | Next.js 15 deployed globally. Reads Supabase directly. |
+| Repo | github.com/ritvikv03/MM | Public. Unlimited Actions minutes. |
+
+### Cron Schedule
+```yaml
+# .github/workflows/daily_pipeline.yml
+schedule:
+  - cron: '0 11 * * *'   # 6 AM ET  — full: scrape all + train + predict + write
+  - cron: '0 17 * * *'   # 12 PM ET — intel: injuries/alerts + warm-start update
+  - cron: '0 3 * * *'    # 10 PM ET — results: ingest outcomes + Brier score update
+```
+
+### Run Profiles
+- **`full`** (6 AM): All scrapers → ST-GNN → Bayesian ADVI → Calibration → MC 10k → CLV → RL → Supabase
+- **`intel`** (12 PM): Intel scrapers only → severity scoring → temporal Bayesian warm-start → partial snapshot update
+- **`results`** (10 PM): Kaggle game results → Brier/Log-Loss computation → isotonic recalibration trigger
+
+### No Persistent Backend Server
+There is no always-on backend process (no Fly.io, no Railway, no Heroku).
+- Heavy ML runs in GitHub Actions (7GB RAM, 2 cores, free)
+- Frontend reads pre-computed predictions from Supabase via Next.js API routes
+- On-demand matchup calculations use a lightweight analytical logistic model (no PyMC at request time)
+- Intel alerts push via Supabase Realtime (WebSocket, no polling needed)
+
+---
+
+## 16. No Synthetic Data — Hard Rule
+
+**SYNTHETIC DATA IS PERMANENTLY FORBIDDEN in Madness Matrix.**
+
+This rule overrides all fallbacks, convenience stubs, and demo modes.
+
+1. **Delete all stub functions** — `_build_stub_graph()`, `_build_stub_matchup()`, `_build_stub_simulate()` and all `_build_stub_*` variants are removed from `server.py`. Do not recreate them.
+2. **Delete `frontend/lib/mock-data.ts`** — this file must not exist. Do not recreate it.
+3. **Delete `USE_REAL_DATA` env var** — the flag and all `os.getenv("USE_REAL_DATA")` checks are removed. Real data is always used.
+4. **Delete `StubDataBanner`** — the yellow warning banner component is removed. No stub mode exists.
+5. **If a data source fails:** Return HTTP 503 with a clear error message. Never fabricate data as a fallback.
+6. **If Supabase is unreachable:** Return 503. Never serve synthetic predictions.
+7. **All predictions carry uncertainty.** Point estimates alone are forbidden. Every prediction must include posterior credible intervals or confidence bands.
+
+**Rationale:** Synthetic data misleads users into making real bracket decisions based on random numbers. The entire value proposition of Madness Matrix is rigorous quantitative forecasting — stub data destroys that completely.
+
+---
+
+## 17. Frontend Stack Standards
+
+### Tech Stack (current — overrides §13 Three.js notes)
+```
+Framework:   Next.js 15 (App Router)
+Styling:     Tailwind CSS + shadcn/ui
+State:       @tanstack/react-query (server state), React useState (UI state)
+Database:    @supabase/supabase-js (reads + Realtime subscriptions)
+Charts:      Recharts (heatmaps, sparklines, calibration curves)
+Animation:   Framer Motion (page transitions)
+Validation:  Zod (all API response schemas)
+Dates:       date-fns
+Testing:     Vitest + @testing-library/react + Playwright
+```
+
+### Removed (do not use or reinstall)
+- `three`, `@react-three/fiber`, `@react-three/drei` — Three.js/R3F removed with graph tab
+- Inline `style={{}}` objects — use Tailwind classes instead
+- Custom `GlassCard`, `GlowButton` — use shadcn/ui `Card`, `Button`
+- Raw D3 in JSX — use Recharts; raw D3 only acceptable for KDE computation (`lib/d3-kde.ts`)
+
+### Navigation (5 tabs — graph tab permanently removed)
+```
+[Live 2026] [Rankings] [Matchup] [Bracket] [War Room]
+```
+Season selector is **global state** — switching season updates ALL tabs simultaneously.
+
+### Season Behavior
+- **2026 (current):** Live tab enabled with real-time predictions. All tabs show live data.
+- **2012–2025 (historical):** All tabs show frozen pre-tournament snapshot. Actual results overlaid as ✓/✗ for accuracy review. Live tab shows historical descriptive view.
+
+### Live 2026 Tab — Three Sub-Views
+- **Descriptive:** What happened — efficiency trends, results feed, injury timeline
+- **Predictive:** What will happen — bracket probabilities, probability drift chart (temporal Bayesian), calibration curve (isotonic)
+- **Prescriptive:** What to do — CLV picks, RL bracket variants, Kelly sizing, Intel alerts
+
+### ML Outputs Surfaced in Frontend
+All three new ML additions from the prediction engine must be visible in the UI:
+1. **Isotonic calibration** → calibration curve in Live → Predictive sub-view (Recharts LineChart)
+2. **Temporal Bayesian updating** → probability drift sparklines in Live → Predictive + Rankings trend column
+3. **Conference RPI weighting** → star-tier badge in Rankings table + Chaos Agent panel in Matchup Oracle
 
 ---
 

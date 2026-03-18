@@ -60,7 +60,7 @@ class GraphResponse(BaseModel):
 class MatchupRequest(BaseModel):
     home_team:    str
     away_team:    str
-    season:       int  = 2024
+    season:       int  = 2026
     neutral_site: bool = False
 
 
@@ -80,6 +80,7 @@ class MatchupResponse(BaseModel):
 class SimulateRequest(BaseModel):
     teams:         List[str]
     n_simulations: int = Field(default=1000, ge=100, le=50000)
+    season:        int = Field(default=2026, ge=2010, le=2030)
 
 
 class TeamAdvancementItem(BaseModel):

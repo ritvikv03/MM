@@ -2,14 +2,14 @@ import { describe, it, expect } from 'vitest';
 
 // Test pure nav logic (no React rendering needed)
 describe('NavPage routing', () => {
-  const PAGES = ['constellation', 'matchup', 'bracket'] as const;
+  const PAGES = ['rankings', 'matchup', 'bracket', 'projections', 'warroom'] as const;
 
-  it('has 3 pages', () => {
-    expect(PAGES).toHaveLength(3);
+  it('has 5 pages', () => {
+    expect(PAGES).toHaveLength(5);
   });
 
-  it('constellation is the default/first page', () => {
-    expect(PAGES[0]).toBe('constellation');
+  it('rankings is the first page', () => {
+    expect(PAGES[0]).toBe('rankings');
   });
 
   it('all pages are unique strings', () => {

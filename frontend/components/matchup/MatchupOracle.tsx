@@ -2,7 +2,7 @@
 import { useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { fetchMatchup } from '@/lib/api';
-import { getConferenceName, MOCK_TEAMS } from '@/lib/mock-data';
+import { getConferenceName, TOURNAMENT_TEAMS_2026 as MOCK_TEAMS } from '@/lib/team-data';
 import type { EnrichedMatchupResponse } from '@/lib/api-types';
 
 const TEAMS = MOCK_TEAMS.map(t => t.name);
@@ -18,7 +18,7 @@ export function MatchupAnalyzer() {
     if (!homeTeam || !awayTeam) return;
     setLoading(true);
     try {
-      const res = await fetchMatchup({ home_team: homeTeam, away_team: awayTeam, season: 2025, neutral_site: true });
+      const res = await fetchMatchup({ home_team: homeTeam, away_team: awayTeam, season: 2026, neutral_site: true });
       setResult(res);
     } catch { /* handled by api layer */ }
     finally { setLoading(false); }

@@ -1,10 +1,10 @@
 'use client';
 import { useState, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { MOCK_TEAMS, getConferenceName } from '@/lib/mock-data';
-import { simulateBracket } from '@/lib/api';
+import { TOURNAMENT_TEAMS_2026 as MOCK_TEAMS, getConferenceName } from '@/lib/team-data';
+import { simulateBracket, fetchOptimalBracket } from '@/lib/api';
 import { BracketHeatmap } from './BracketHeatmap';
-import type { MockTeam } from '@/lib/mock-data';
+import type { TeamData as MockTeam } from '@/lib/team-data';
 import type { SimulateResponse } from '@/lib/api-types';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -13,7 +13,6 @@ const REGIONS = ['East', 'South', 'West', 'Midwest'] as const;
 function parseCoachWins(record: string): number {
   return parseInt(record.split('-')[0], 10) || 0;
 }
-type Region = typeof REGIONS[number];
 // R64 pairing order: 1v16, 8v9, 5v12, 4v13, 6v11, 3v14, 7v10, 2v15
 const SEED_ORDER = [1, 16, 8, 9, 5, 12, 4, 13, 6, 11, 3, 14, 7, 10, 2, 15];
 type RoundName = 'R64' | 'R32' | 'S16' | 'E8' | 'F4' | 'Championship';
@@ -42,26 +41,91 @@ interface InterrogatorData {
   radarB: number[];
 }
 
+// ─── Stat factor types ────────────────────────────────────────────────────────
+type StatFactor = 'adjOE' | 'adjDE' | 'luck' | 'sos' | 'coach' | 'tempo';
+type FactorWeights = Record<StatFactor, boolean>;
+
+const DEFAULT_FACTORS: FactorWeights = {
+  adjOE: true,
+  adjDE: true,
+  luck:  true,
+  sos:   false,
+  coach: false,
+  tempo: false,
+};
+
+const FACTOR_LABELS: Record<StatFactor, string> = {
+  adjOE:  'Adj OE',
+  adjDE:  'Adj DE',
+  luck:   'Luck Regression',
+  sos:    'SOS',
+  coach:  'Coach Exp',
+  tempo:  'Tempo',
+};
+
+const FACTOR_DESCRIPTIONS: Record<StatFactor, string> = {
+  adjOE:  'Offensive efficiency (pts/100 poss)',
+  adjDE:  'Defensive efficiency (pts allowed/100)',
+  luck:   'Regress close-game over-performance',
+  sos:    'Strength of schedule adjustment',
+  coach:  'Coach tournament win history',
+  tempo:  'Pace-of-play variance (mismatches → 50/50)',
+};
+
 // ─── Core model ───────────────────────────────────────────────────────────────
-function computeWinProb(a: MockTeam, b: MockTeam, chaos: number, wpaMap: Record<string, number> = {}): number {
+/**
+ * Luck-regressed logistic win probability.
+ * Matches backend bracket_runner._win_prob(scale=4.0).
+ * Factor weights allow users to toggle components on/off.
+ */
+function computeWinProb(
+  a: MockTeam,
+  b: MockTeam,
+  factors: FactorWeights,
+  wpaMap: Record<string, number> = {},
+): number {
   const wpaA = wpaMap[a.name] ?? 0;
   const wpaB = wpaMap[b.name] ?? 0;
-  const emA = a.adj_oe - a.adj_de - a.luck * 2.5 + wpaA;
-  const emB = b.adj_oe - b.adj_de - b.luck * 2.5 + wpaB;
-  const pEff = 1 / (1 + Math.exp(-(emA - emB) / 10));
 
-  const dnaA = Math.min(1, a.sos / 10) * 0.3 + (1 - Math.abs(a.luck) * 5) * 0.3 + Math.min(1, parseCoachWins(a.coachTourneyRecord) / 20) * 0.4;
-  const dnaB = Math.min(1, b.sos / 10) * 0.3 + (1 - Math.abs(b.luck) * 5) * 0.3 + Math.min(1, parseCoachWins(b.coachTourneyRecord) / 20) * 0.4;
-  const pDna = 1 / (1 + Math.exp(-(dnaA - dnaB) * 5));
+  // Base efficiency margin
+  const oeA = factors.adjOE ? a.adj_oe : 115.0;
+  const deA = factors.adjDE ? a.adj_de : 100.0;
+  const oeB = factors.adjOE ? b.adj_oe : 115.0;
+  const deB = factors.adjDE ? b.adj_de : 100.0;
 
-  const wEff = 0.7 * (1.2 - chaos * 0.6);
-  const wDna = 0.3 * (0.7 + chaos * 0.8);
-  const wTotal = wEff + wDna;
-  let p = (wEff / wTotal) * pEff + (wDna / wTotal) * pDna;
+  // Luck regression penalty (Law of Large Numbers — 35-game sample regression)
+  const luckPenaltyA = factors.luck ? a.luck * 2.5 : 0;
+  const luckPenaltyB = factors.luck ? b.luck * 2.5 : 0;
 
-  if (chaos > 0.6) {
-    p = p * (1 - (chaos - 0.6) * 0.5) + 0.5 * (chaos - 0.6) * 0.5;
+  const emA = oeA - deA - luckPenaltyA + wpaA;
+  const emB = oeB - deB - luckPenaltyB + wpaB;
+
+  // Core logistic (scale=4.0, consistent with backend)
+  let p = 1 / (1 + Math.exp(-(emA - emB) / 4.0));
+
+  // SOS adjustment: tighter schedule → slight edge
+  if (factors.sos) {
+    const sosAdj = (a.sos - b.sos) * 0.012;
+    p = Math.max(0.02, Math.min(0.98, p + sosAdj));
   }
+
+  // Coach tournament experience adjustment
+  if (factors.coach) {
+    const cA = parseCoachWins(a.coachTourneyRecord);
+    const cB = parseCoachWins(b.coachTourneyRecord);
+    const coachAdj = (cA - cB) * 0.002;
+    p = Math.max(0.02, Math.min(0.98, p + coachAdj));
+  }
+
+  // Tempo factor: large mismatch compresses toward 0.5 (more possessions = less variance)
+  if (factors.tempo) {
+    const tempoDiff = Math.abs(a.tempo - b.tempo);
+    if (tempoDiff > 6) {
+      // High pace-variance: pull 10% toward coin flip
+      p = p * 0.9 + 0.5 * 0.1;
+    }
+  }
+
   return Math.max(0.02, Math.min(0.98, p));
 }
 
@@ -74,7 +138,7 @@ function estimateSpread(a: MockTeam, b: MockTeam): number {
 function computeBracket(
   bracketByRegion: Record<string, MockTeam[]>,
   userPicks: Map<string, MockTeam>,
-  chaos: number,
+  factors: FactorWeights,
   wpaMap: Record<string, number>,
 ): BracketGame[] {
   const mk = (id: string, round: RoundName, region: string, pos: number, teamA: MockTeam | null, teamB: MockTeam | null): BracketGame => ({
@@ -86,7 +150,7 @@ function computeBracket(
   const resolveGame = (id: string) => {
     const g = gm.get(id)!;
     if (!g.teamA || !g.teamB) return;
-    g.winProb = computeWinProb(g.teamA, g.teamB, chaos, wpaMap);
+    g.winProb = computeWinProb(g.teamA, g.teamB, factors, wpaMap);
     const modelWinner = g.winProb >= 0.5 ? g.teamA : g.teamB;
     const userPick = userPicks.get(id);
     g.winner = userPick ?? modelWinner;
@@ -618,13 +682,14 @@ function Interrogator({
 
 // ─── Main FullBracket component ───────────────────────────────────────────────
 export function FullBracket() {
-  const [chaos, setChaos] = useState(0.5);
+  const [factors, setFactors] = useState<FactorWeights>(DEFAULT_FACTORS);
   const [wpaMap, setWpaMap] = useState<Record<string, number>>({});
   const [userPicks, setUserPicks] = useState<Map<string, MockTeam>>(new Map());
   const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
   const [simData, setSimData] = useState<SimulateResponse | null>(null);
   const [simLoading, setSimLoading] = useState(false);
   const [simError, setSimError] = useState<string | null>(null);
+  const [optimalLoading, setOptimalLoading] = useState(false);
 
   // Pre-sort teams by region using seed order
   const bracketByRegion = useMemo(() => {
@@ -641,10 +706,10 @@ export function FullBracket() {
     return result;
   }, []);
 
-  // Derived bracket — recomputed whenever chaos, wpaMap, or userPicks change
+  // Derived bracket — recomputed whenever factors, wpaMap, or userPicks change
   const games = useMemo(
-    () => computeBracket(bracketByRegion, userPicks, chaos, wpaMap),
-    [bracketByRegion, userPicks, chaos, wpaMap],
+    () => computeBracket(bracketByRegion, userPicks, factors, wpaMap),
+    [bracketByRegion, userPicks, factors, wpaMap],
   );
 
   const champion = useMemo(() => games.find(g => g.id === 'Championship-0')?.winner ?? null, [games]);
@@ -654,9 +719,9 @@ export function FullBracket() {
     if (!selectedGameId) return null;
     const game = games.find(g => g.id === selectedGameId);
     if (!game?.teamA || !game?.teamB) return null;
-    const pWin = computeWinProb(game.teamA, game.teamB, chaos, wpaMap);
+    const pWin = computeWinProb(game.teamA, game.teamB, factors, wpaMap);
     return generateNarrative(game.teamA, game.teamB, pWin);
-  }, [selectedGameId, games, chaos, wpaMap]);
+  }, [selectedGameId, games, factors, wpaMap]);
 
   const handlePickWinner = useCallback((gameId: string, winner: MockTeam) => {
     setUserPicks(prev => {
@@ -697,6 +762,48 @@ export function FullBracket() {
     setSelectedGameId(null);
   }, []);
 
+  const handleOptimalBracket = useCallback(async () => {
+    setOptimalLoading(true);
+    setSimError(null);
+    try {
+      const optimal = await fetchOptimalBracket();
+      // Build a champ-probability map for auto-filling picks
+      const champMap: Record<string, number> = {};
+      for (const t of optimal.advancements) {
+        champMap[t.team] = t.champ_probability;
+      }
+      // Auto-fill every game: pick the team with higher championship probability
+      const newPicks = new Map<string, MockTeam>();
+      const allGames = computeBracket(bracketByRegion, new Map(), factors, wpaMap);
+      for (const game of allGames) {
+        if (!game.teamA || !game.teamB) continue;
+        const pA = champMap[game.teamA.name] ?? 0;
+        const pB = champMap[game.teamB.name] ?? 0;
+        if (pA !== pB) {
+          newPicks.set(game.id, pA > pB ? game.teamA : game.teamB);
+        }
+      }
+      setUserPicks(newPicks);
+      // Store sim data for heatmap if available
+      if (optimal.advancements.length > 0) {
+        setSimData({
+          n_simulations: optimal.n_simulations,
+          advancements: optimal.advancements.map(t => ({
+            team: t.team,
+            advancement_probs: t.advancement_probs,
+            entropy: t.entropy,
+          })),
+          data_source: optimal.data_source as 'real' | 'stub',
+        });
+      }
+    } catch (err) {
+      setSimError('Optimal bracket unavailable — using local model instead.');
+      console.error('[BracketSimulator] fetchOptimalBracket error:', err);
+    } finally {
+      setOptimalLoading(false);
+    }
+  }, [bracketByRegion, factors, wpaMap]);
+
   const f4_0 = games.find(g => g.id === 'F4-0')!;
   const f4_1 = games.find(g => g.id === 'F4-1')!;
   const champGame = games.find(g => g.id === 'Championship-0')!;
@@ -715,7 +822,7 @@ export function FullBracket() {
           <h1 style={{ fontFamily: 'var(--font-space-grotesk)', color: '#ff6b35', fontWeight: 700, fontSize: '18px', letterSpacing: '0.05em' }}>
             BRACKET ENGINE
           </h1>
-          <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             {(userPicks.size > 0 || Object.keys(wpaMap).length > 0) && (
               <button
                 onClick={handleResetPicks}
@@ -724,6 +831,14 @@ export function FullBracket() {
                 RESET {userPicks.size > 0 ? `PICKS (${userPicks.size})` : 'WPA'}
               </button>
             )}
+            <button
+              onClick={handleOptimalBracket}
+              disabled={optimalLoading}
+              title="Run 10,000 Monte Carlo simulations and auto-fill optimal picks"
+              style={{ fontSize: '9px', color: '#d4a843', background: 'rgba(212,168,67,0.12)', border: '1px solid rgba(212,168,67,0.4)', borderRadius: '4px', padding: '4px 10px', cursor: optimalLoading ? 'wait' : 'pointer', fontWeight: 700 }}
+            >
+              {optimalLoading ? '⏳ COMPUTING…' : '🧠 OPTIMAL BRACKET'}
+            </button>
             <button
               onClick={handleSimulate}
               disabled={simLoading}
@@ -737,23 +852,40 @@ export function FullBracket() {
           <div style={{ fontSize: '9px', color: '#e74c3c', marginBottom: '8px' }}>{simError}</div>
         )}
 
-        {/* Chaos slider */}
+        {/* Stat-weight factor toggles — replaces chaos slider */}
         <div className="glass-highlight p-3 rounded-lg mb-4" style={{ borderTop: '2px solid #d4a843' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-            <span style={{ fontSize: '9px', color: '#d4a843', letterSpacing: '0.1em', fontWeight: 700 }}>🎛️ RISK & VARIANCE DIAL</span>
-            <span style={{ fontSize: '11px', fontWeight: 700, color: chaos < 0.3 ? '#2ecc71' : chaos > 0.7 ? '#e74c3c' : '#d4a843' }}>
-              {chaos < 0.3 ? '🏆 CHALK' : chaos > 0.7 ? '🔥 CHAOS' : '⚖️ VALUE'}
-            </span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <span style={{ fontSize: '9px', color: '#d4a843', letterSpacing: '0.1em', fontWeight: 700 }}>🎛️ MODEL FACTORS</span>
+            <span style={{ fontSize: '8px', color: 'rgba(255,255,255,0.3)' }}>Toggle factors to include in win probability</span>
           </div>
-          <input
-            type="range" min="0" max="100" value={chaos * 100}
-            onChange={(e) => setChaos(parseInt(e.target.value) / 100)}
-            style={{ width: '100%', height: '6px', borderRadius: '3px', appearance: 'none', background: `linear-gradient(90deg, #2ecc71 0%, #d4a843 50%, #e74c3c 100%)`, cursor: 'pointer' }}
-          />
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '3px' }}>
-            <span style={{ fontSize: '7px', color: '#2ecc71' }}>FAVORITES</span>
-            <span style={{ fontSize: '7px', color: '#d4a843' }}>VALUE ZONE</span>
-            <span style={{ fontSize: '7px', color: '#e74c3c' }}>CINDERELLAS</span>
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            {(Object.keys(factors) as StatFactor[]).map(f => (
+              <button
+                key={f}
+                onClick={() => setFactors(prev => ({ ...prev, [f]: !prev[f] }))}
+                title={FACTOR_DESCRIPTIONS[f]}
+                style={{
+                  fontSize: '9px',
+                  padding: '4px 8px',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                  letterSpacing: '0.03em',
+                  border: factors[f]
+                    ? '1px solid rgba(255,107,53,0.6)'
+                    : '1px solid rgba(255,107,53,0.15)',
+                  background: factors[f]
+                    ? 'rgba(255,107,53,0.15)'
+                    : 'rgba(0,0,0,0.3)',
+                  color: factors[f]
+                    ? '#ff6b35'
+                    : 'rgba(255,255,255,0.3)',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                {factors[f] ? '✓ ' : ''}{FACTOR_LABELS[f]}
+              </button>
+            ))}
           </div>
         </div>
 
