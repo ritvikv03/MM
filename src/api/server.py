@@ -17,6 +17,7 @@ If the data pipeline has not run yet, endpoints return HTTP 503.
 from __future__ import annotations
 
 import logging
+import os
 
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -47,9 +48,15 @@ app = FastAPI(
     version="2.0.0",
 )
 
+# Allow localhost in dev + any Vercel deployment URL in production.
+# Set ALLOWED_ORIGINS="https://your-app.vercel.app" in Railway env vars.
+_extra = os.getenv("ALLOWED_ORIGINS", "")
+_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+_origins += [o.strip() for o in _extra.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -1,0 +1,12 @@
+# Slim requirements for the Railway API server — no ML training deps.
+# The heavy ML stack (torch, pymc, wandb) only runs in GitHub Actions.
+numpy>=1.26
+pandas>=2.2
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.7
+python-dotenv>=1.0
+requests>=2.32
+beautifulsoup4>=4.12
+lxml>=5.2
+diskcache>=5.6
