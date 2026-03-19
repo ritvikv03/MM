@@ -43,15 +43,31 @@ def fetch_trank(season: int) -> pd.DataFrame:
 
 
 def load_tournament_seeds(season: int) -> dict[str, int]:
-    """Lazy wrapper around src.data.kaggle_ingestion.load_seeds.
+    """Return a {team_name: seed_int} dict for *season* from Kaggle seed CSV.
 
-    Delegates to ``load_seeds`` from the kaggle_ingestion module.  The *season*
-    argument is passed through; callers are responsible for supplying a valid
-    filepath or season identifier as required by the underlying function.
+    Resolves the canonical Kaggle path pattern and delegates to
+    ``kaggle_ingestion.load_seeds(filepath)``.  Returns {} on any failure
+    (missing file, Kaggle auth not configured, etc.).
     """
+    from pathlib import Path as _Path
     from src.data.kaggle_ingestion import load_seeds as _load_seeds  # type: ignore
 
-    return _load_seeds(season)
+    # Kaggle March Mania datasets land at data/raw/kaggle/MNCAATourneySeeds.csv
+    candidates = [
+        _Path("data/raw/kaggle/MNCAATourneySeeds.csv"),
+        _Path("data/MNCAATourneySeeds.csv"),
+    ]
+    for fp in candidates:
+        if fp.exists():
+            try:
+                df = _load_seeds(fp)
+                season_df = df[df["Season"] == season]
+                # Return {team_id_str: seed_num} — callers handle name resolution
+                return dict(zip(season_df["TeamID"].astype(str), season_df["seed_num"]))
+            except Exception:  # noqa: BLE001
+                break
+    # Kaggle data not present in this environment — return empty gracefully
+    return {}
 
 
 # ---------------------------------------------------------------------------

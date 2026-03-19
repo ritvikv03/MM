@@ -91,6 +91,19 @@ _JSON_BASE_URL = "https://barttorvik.com/{year}_team_results.json"
 _EARLIEST_SEASON = 2008
 _MAX_RETRIES = 3
 
+# Browser-like headers to avoid 403 from barttorvik on headless/CI environments.
+_REQUEST_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/123.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/html, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://barttorvik.com/",
+    "DNT": "1",
+}
+
 _COLUMN_ORDER = [
     "team",
     "conf",
@@ -300,7 +313,7 @@ def _get_with_backoff(url: str, params: dict | None = None, max_retries: int = _
     """
     last_exc: Exception | None = None
     for attempt in range(max_retries):
-        response = requests.get(url, params=params, timeout=30)
+        response = requests.get(url, params=params, headers=_REQUEST_HEADERS, timeout=30)
         if response.ok:
             return response
         last_exc = requests.HTTPError(
@@ -354,7 +367,7 @@ def fetch_trank(season: int) -> pd.DataFrame:
     # --- Attempt 1: direct JSON endpoint (no JS challenge) ---
     json_url = _JSON_BASE_URL.format(year=season)
     try:
-        json_response = requests.get(json_url, timeout=30)
+        json_response = requests.get(json_url, headers=_REQUEST_HEADERS, timeout=30)
         if json_response.ok:
             raw = json_response.json()
             df = _parse_trank_json(raw)
@@ -545,7 +558,7 @@ def _get_with_backoff_runtime(url: str, params: dict | None = None, max_retries:
     """
     last_exc: Exception | None = None
     for attempt in range(max_retries):
-        response = requests.get(url, params=params, timeout=30)
+        response = requests.get(url, params=params, headers=_REQUEST_HEADERS, timeout=30)
         if response.ok:
             return response
         last_exc = requests.HTTPError(
