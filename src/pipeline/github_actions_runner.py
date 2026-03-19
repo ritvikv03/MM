@@ -113,14 +113,21 @@ class PipelineRunner:
         rpis = assign_rpi_tiers(compute_conference_rpi(teams_df))
         logger.info("Conference RPI computed for %d conferences", len(rpis))
 
-        # 3. Write teams to Supabase
+        # 3. Write teams to Supabase (only columns that exist in the schema)
+        _TEAM_COLS = {"name", "conference", "seed", "adj_oe", "adj_de", "adj_em",
+                      "tempo", "luck", "sos", "coach", "region"}
         team_rows = teams_df.to_dict(orient="records")
         now = datetime.datetime.utcnow().isoformat()
+        filtered_rows = []
         for row in team_rows:
-            row["season"]     = self.season
-            row["adj_em"]     = round(row.get("adj_oe", 0) - row.get("adj_de", 0), 2)
-            row["scraped_at"] = now
-        self._writer.upsert_teams(team_rows)
+            filtered = {k: v for k, v in row.items() if k in _TEAM_COLS}
+            filtered["season"]     = self.season
+            filtered["adj_em"]     = round(
+                float(filtered.get("adj_oe") or 0) - float(filtered.get("adj_de") or 0), 2
+            )
+            filtered["scraped_at"] = now
+            filtered_rows.append(filtered)
+        self._writer.upsert_teams(filtered_rows)
 
         # 4. Run Monte Carlo bracket simulation and write to Supabase
         predictions_computed = 0
@@ -164,7 +171,7 @@ class PipelineRunner:
             logger.warning("Intel snapshot skipped: %s", exc)
 
         return {
-            "teams_updated":        len(team_rows),
+            "teams_updated":        len(filtered_rows),
             "predictions_computed": predictions_computed,
             "alerts_found":         0,
         }
