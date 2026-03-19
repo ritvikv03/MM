@@ -100,8 +100,9 @@ class PipelineRunner:
         # 1. Scrape T-Rank efficiency metrics
         teams_df = fetch_trank(self.season)
 
-        # Normalize column names: fetch_trank returns conf/adj_o/adj_d/adj_t/sos_adj_em
+        # Normalize column names: fetch_trank returns team/conf/adj_o/adj_d/adj_t/sos_adj_em
         teams_df = teams_df.rename(columns={
+            "team":       "name",
             "conf":       "conference",
             "sos_adj_em": "sos",
             "adj_o":      "adj_oe",
