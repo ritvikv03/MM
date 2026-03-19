@@ -115,19 +115,42 @@ class PipelineRunner:
         logger.info("Conference RPI computed for %d conferences", len(rpis))
 
         # 3. Write teams to Supabase (only columns that exist in the schema)
-        _TEAM_COLS = {"name", "conference", "seed", "adj_oe", "adj_de", "adj_em",
-                      "tempo", "luck", "sos", "coach", "region"}
+        # barttorvik column → Supabase column mapping (explicit, not rename-dependent)
+        _COL_MAP = {
+            "name":        "name",
+            "team":        "name",       # barttorvik raw key fallback
+            "conference":  "conference",
+            "conf":        "conference", # barttorvik raw key fallback
+            "adj_oe":      "adj_oe",
+            "adj_o":       "adj_oe",     # barttorvik raw key fallback
+            "adj_de":      "adj_de",
+            "adj_d":       "adj_de",     # barttorvik raw key fallback
+            "tempo":       "tempo",
+            "adj_t":       "tempo",      # barttorvik raw key fallback
+            "luck":        "luck",
+            "sos":         "sos",
+            "sos_adj_em":  "sos",        # barttorvik raw key fallback
+            "seed":        "seed",
+            "coach":       "coach",
+            "region":      "region",
+        }
         team_rows = teams_df.to_dict(orient="records")
         now = datetime.datetime.utcnow().isoformat()
         filtered_rows = []
         for row in team_rows:
-            filtered = {k: v for k, v in row.items() if k in _TEAM_COLS}
-            filtered["season"]     = self.season
-            filtered["adj_em"]     = round(
-                float(filtered.get("adj_oe") or 0) - float(filtered.get("adj_de") or 0), 2
+            out: dict = {}
+            for src_key, dst_key in _COL_MAP.items():
+                if src_key in row and dst_key not in out:
+                    out[dst_key] = row[src_key]
+            if not out.get("name"):
+                continue  # skip rows where team name is empty/null
+            out["season"]     = self.season
+            out["adj_em"]     = round(
+                float(out.get("adj_oe") or 0) - float(out.get("adj_de") or 0), 2
             )
-            filtered["scraped_at"] = now
-            filtered_rows.append(filtered)
+            out["scraped_at"] = now
+            filtered_rows.append(out)
+        logger.info("Teams prepared for upsert: %d rows", len(filtered_rows))
         self._writer.upsert_teams(filtered_rows)
 
         # 4. Run Monte Carlo bracket simulation and write to Supabase
