@@ -100,6 +100,15 @@ class PipelineRunner:
         # 1. Scrape T-Rank efficiency metrics
         teams_df = fetch_trank(self.season)
 
+        # Normalize column names: fetch_trank returns conf/adj_o/adj_d/adj_t/sos_adj_em
+        teams_df = teams_df.rename(columns={
+            "conf":       "conference",
+            "sos_adj_em": "sos",
+            "adj_o":      "adj_oe",
+            "adj_d":      "adj_de",
+            "adj_t":      "tempo",
+        })
+
         # 2. Compute Conference RPI for GAT Conference node features
         rpis = assign_rpi_tiers(compute_conference_rpi(teams_df))
         logger.info("Conference RPI computed for %d conferences", len(rpis))
